@@ -463,13 +463,14 @@ fun PlayerScreen(onFinish: () -> Unit) {
                 duration = MpvEngine.duration
                 playing = MpvEngine.playing
                 buffering = false
+                if (MpvEngine.speedText.isNotEmpty()) speedText = MpvEngine.speedText
                 delay(500)
                 continue
             }
             val now = bytesLoaded
             val delta = now - lastBytes
             lastBytes = now
-            speedText = if (delta > 1024) "${delta / 1024} KB/s" else ""
+            if (delta > 1024) speedText = "${delta / 1024} KB/s"
             delay(1000)
         }
     }
@@ -554,16 +555,15 @@ fun PlayerScreen(onFinish: () -> Unit) {
             )
         }
 
-        if (loading || livePending) {
+        // 只保留白圈 + 速度：不再显示"解析播放地址…/正在进入直播…"这类文字。
+        // MPV 模式用 mpv 的时长/进度判断是否已出画面（没有 ExoPlayer 的字节统计）。
+        val mpvBooting = Store.settings.engine == 1 && MpvEngine.duration <= 0L && MpvEngine.position <= 0L
+        if (loading || livePending || mpvBooting) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = if (livePending) "正在进入直播…" else "解析播放地址…",
-                        color = Color.White,
-                        fontSize = 13.sp
-                    )
+                    Text(text = speedText.ifEmpty { "缓冲中…" }, color = Color.White, fontSize = 13.sp)
                 }
             }
         }
@@ -979,7 +979,7 @@ fun PlayerScreen(onFinish: () -> Unit) {
                 CircularProgressIndicator(color = Color.White, modifier = Modifier.size(30.dp))
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = if (speedText.isNotEmpty()) speedText else "加载中…",
+                    text = speedText,
                     color = Color.White,
                     fontSize = 13.sp
                 )

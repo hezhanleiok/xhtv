@@ -30,6 +30,9 @@ object MpvEngine {
     var duration by mutableStateOf(0L)
     var error by mutableStateOf("")
 
+    /** 缓冲速度文本（来自 mpv 的 cache-speed；取不到就保持空/上次值）。 */
+    var speedText by mutableStateOf("")
+
     fun pause(p: Boolean) {
         runCatching { MPVLib.setPropertyString("pause", if (p) "yes" else "no") }
     }
@@ -69,6 +72,7 @@ object MpvEngine {
     }
 
     fun reset() {
+        speedText = ""
         ready = false
         playing = false
         position = 0L
@@ -110,6 +114,7 @@ internal fun MpvPlayerView(
                 when (property) {
                     "time-pos" -> MpvEngine.position = (value * 1000).toLong()
                     "duration" -> MpvEngine.duration = (value * 1000).toLong()
+                    "cache-speed" -> if (value > 1024) MpvEngine.speedText = "${(value / 1024).toInt()} KB/s"
                 }
             }
 
@@ -131,6 +136,8 @@ internal fun MpvPlayerView(
             MPVLib.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
             MPVLib.observeProperty("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
             MPVLib.observeProperty("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
+            // 缓冲速度：属性不存在时只是收不到事件，不影响播放
+            runCatching { MPVLib.observeProperty("cache-speed", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE) }
             MpvEngine.ready = true
             Diag.log("Mpv", "MPV 核心初始化成功（libmpv + libplayer 已加载）")
         } catch (t: Throwable) {

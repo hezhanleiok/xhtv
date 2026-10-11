@@ -273,10 +273,15 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
             fsPosition = if (Store.settings.engine == 1) MpvEngine.position else (player?.currentPosition ?: 0L)
             fsDuration = if (Store.settings.engine == 1) MpvEngine.duration else (player?.duration ?: 0L).coerceAtLeast(0L)
             fsPlaying = if (Store.settings.engine == 1) MpvEngine.playing else player?.isPlaying == true
-            // 每秒算一次加载速度（KB/s），用于"开始播放前"的加载提示
-            val deltaBytes = fsBytesLoaded - fsLastBytes
-            fsLastBytes = fsBytesLoaded
-            fsSpeedText = if (deltaBytes > 1024) "${deltaBytes / 1024} KB/s" else ""
+            // 速度：EXO 用真实字节增量；MPV 用 mpv 的 cache-speed。
+            // 关键：没有增量时不要清空文字，否则"白圈+速度"会一闪一闪、只剩白圈。
+            if (Store.settings.engine == 1) {
+                if (MpvEngine.speedText.isNotEmpty()) fsSpeedText = MpvEngine.speedText
+            } else {
+                val deltaBytes = fsBytesLoaded - fsLastBytes
+                fsLastBytes = fsBytesLoaded
+                if (deltaBytes > 1024) fsSpeedText = "${deltaBytes / 1024} KB/s"
+            }
             // 片头（一集只跳一次）/ 片尾（到点自动下一集）
             if (fsIntro > 0 && fsPosition in 0 until fsIntro) engineSeek(player, fsIntro)
             if (fsOutro > 0 && fsPosition >= fsOutro && episodeIndex + 1 < episodes.size) {
@@ -332,8 +337,14 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
 
     // 详情页播放失败（站点没有这部片 / 详情为空 → 没有选集）→ 自动换到其它站点的同名影片。
     // 用户实际就是在详情页踩到的：内嵌播放器报"没有选集"，而播放页那套自动换源根本不会执行。
-    LaunchedEffect(playError) {
-        if (playError.isEmpty()) return@LaunchedEffect
+    // 触发条件必须同时覆盖两种失败：playError=播放器解析失败；error=详情为空（站点没有这部片）。
+    // 之前只看 playError，而"空详情"只写 error → 自动换源一次都没执行（日志实证）。
+    LaunchedEffect(error, playError) {
+        // 只在"真的没法播"时换源：播放器失败，或详情为空/当前 Vod 没有任何选集。
+        // （避免一次网络抖动就把用户切到别的站点）
+        val noEpisodes = flags.isEmpty() || flags.all { it.episodes.isEmpty() }
+        if (error.isEmpty() && playError.isEmpty()) return@LaunchedEffect
+        if (playError.isEmpty() && !noEpisodes) return@LaunchedEffect
         android.widget.Toast.makeText(context, "当前站点放不了，正在尝试其它站点…", android.widget.Toast.LENGTH_SHORT).show()
         if (playVM.switchSameVodSite()) {
             // 换站成功：详情也换成新站点的，保证标题/线路/选集一致
@@ -424,12 +435,15 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                     onEnded = { if (episodeIndex + 1 < episodes.size) start(episodeIndex + 1) },
                     modifier = Modifier.fillMaxSize()
                 )
-                if (playLoading || info == null) {
+                // 加载/缓冲浮层：只保留白圈 + 速度（不再有"解析播放地址…"这类文字）。
+                // MPV 没有 ExoPlayer 的字节统计，用 mpv 的时长/进度判断是否已出画面。
+                val mpvBooting = Store.settings.engine == 1 && MpvEngine.duration <= 0L && MpvEngine.position <= 0L
+                if (playLoading || (info == null && playError.isEmpty()) || mpvBooting) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(28.dp))
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = "解析播放地址…", color = Color.White, fontSize = 12.sp)
+                            Text(text = fsSpeedText.ifEmpty { "缓冲中…" }, color = Color.White, fontSize = 12.sp)
                         }
                     }
                 }
@@ -438,18 +452,7 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                         Text(text = playError, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(24.dp))
                     }
                 }
-                // 地址已解析但画面还没出来：白色转圈 + 实时加载速度（照参考项目）
-                if (!playLoading && info != null && playError.isEmpty() && !fsPlaying && fsPosition == 0L) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(28.dp))
-                            if (fsSpeedText.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(text = fsSpeedText, color = Color.White, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
+
                 IconButton(
                     onClick = { nav.popBackStack() },
                     modifier = Modifier.align(Alignment.TopStart)
