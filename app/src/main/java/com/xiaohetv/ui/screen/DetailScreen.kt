@@ -438,7 +438,9 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                 // 加载/缓冲浮层：只保留白圈 + 速度（不再有"解析播放地址…"这类文字）。
                 // MPV 没有 ExoPlayer 的字节统计，用 mpv 的时长/进度判断是否已出画面。
                 val mpvBooting = Store.settings.engine == 1 && MpvEngine.duration <= 0L && MpvEngine.position <= 0L
-                if (playLoading || (info == null && playError.isEmpty()) || mpvBooting) {
+                // EXO 模式下"地址已解析但画面还没出来"也必须显示浮层，否则就是黑屏无提示。
+                val exoBooting = Store.settings.engine != 1 && info != null && playError.isEmpty() && !fsPlaying && fsPosition == 0L
+                if (playLoading || (info == null && playError.isEmpty()) || mpvBooting || exoBooting) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(28.dp))
