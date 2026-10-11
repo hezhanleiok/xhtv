@@ -201,10 +201,11 @@ fun PlayerScreen(onFinish: () -> Unit) {
 
     // 点播：解析失败（例如站点返回“没有选集/没有播放源”）→ 自动换到其它站点的同名影片
     // （参考项目 / TVBox 的换源逻辑；只在一棵树上吊死必然大量“播不了”）
-    val autoSwitching = remember { mutableStateOf(false) }
-    LaunchedEffect(vm.error, info, flags) {
-        if (isLive || info != null || vm.error.value.isEmpty() || autoSwitching.value) return@LaunchedEffect
-        autoSwitching.value = true
+    // 只看错误本身：之前判断里有 `info != null`，上一次播放成功留下的旧 info 会让这里永远 return，
+    // 自动换源根本没机会执行（实测日志里一次 跨站点换源 记录都没有）。
+    // 重复尝试由 PlayerVM 的 failedVodSites 兜住，不会死循环。
+    LaunchedEffect(vm.error) {
+        if (isLive || vm.error.value.isEmpty()) return@LaunchedEffect
         Toast.makeText(context, "当前站点放不了，正在尝试其它站点…", Toast.LENGTH_SHORT).show()
         vm.switchSameVodSite()
     }

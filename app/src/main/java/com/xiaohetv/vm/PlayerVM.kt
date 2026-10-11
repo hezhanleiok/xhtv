@@ -333,9 +333,14 @@ class PlayerVM : ViewModel() {
      * `stage=entry failed errorMessage=没有选集`，属于典型该自动换源的情形。
      */
     suspend fun switchSameVodSite(): Boolean {
-        val vod = Session.vod ?: return false
-        val name = vod.vodName.trim()
-        if (name.isEmpty()) return false
+        val vod = Session.vod
+        // 片名可能为空（站点返回空详情／从别的站源跳进来），这时用搜索词兜底 ——
+        // 实测日志里正是 `movie=`（空片名）导致跨站换源无从下手。
+        val name = (vod?.vodName ?: "").trim().ifBlank { Session.searchKey.trim() }
+        if (name.isEmpty()) {
+            Diag.warn("VOD", "跨站点换源跳过：片名与搜索词都为空")
+            return false
+        }
         Session.site?.key?.let { failedVodSites.add(it) }
         val candidates = VodConfig.visibleSites().filter { it.key !in failedVodSites }
         if (candidates.isEmpty()) {

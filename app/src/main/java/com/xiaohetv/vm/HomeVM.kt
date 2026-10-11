@@ -282,11 +282,19 @@ class DetailVM : ViewModel() {
                 if (item == null) error.value = outcome.exceptionOrNull()?.message ?: "详情加载失败"
                 else {
                     item.siteKey = site.key
-                    // 关键：详情才带回完整的播放源（vod_play_from/vod_play_url），必须写回 Session。
-                    // 否则播放器拿到的还是搜索/首页那份只有标题海报的残缺 Vod → 一直"无法播放"。
-                    Session.vod = item
-                    vod.value = item
-                    Diag.log("Detail", "详情就绪：「${item.vodName}」线路 ${item.flags().size} 条，已写回 Session")
+                    // 关键：详情才带回完整的播放源，必须写回 Session；
+                    // 但站点拿到不匹配的 id 时会返回"空详情"（无片名、线路里没有选集），
+                    // 这种结果绝不能写回 Session —— 会把手上的正常 Vod 冲掉，播放立刻变成"没有选集"
+                    // （实测日志：`详情就绪：「」线路 1 条，已写回 Session` → `entry failed 没有选集`）。
+                    val usable = item.vodName.isNotBlank() && item.flags().any { it.episodes.isNotEmpty() }
+                    if (usable) {
+                        Session.vod = item
+                        vod.value = item
+                        Diag.log("Detail", "详情就绪：「${item.vodName}」线路 ${item.flags().size} 条，已写回 Session")
+                    } else {
+                        error.value = "「${site.name}」没有这部影片的播放源"
+                        Diag.warn("Detail", "空详情（未写回 Session）：site=${site.name} id=$id name=「${item.vodName}」flags=${item.flags().size}")
+                    }
                 }
             }
         }

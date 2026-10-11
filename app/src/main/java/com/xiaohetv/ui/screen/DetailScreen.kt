@@ -330,6 +330,19 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
         }
     }
 
+    // 详情页播放失败（站点没有这部片 / 详情为空 → 没有选集）→ 自动换到其它站点的同名影片。
+    // 用户实际就是在详情页踩到的：内嵌播放器报"没有选集"，而播放页那套自动换源根本不会执行。
+    LaunchedEffect(playError) {
+        if (playError.isEmpty()) return@LaunchedEffect
+        android.widget.Toast.makeText(context, "当前站点放不了，正在尝试其它站点…", android.widget.Toast.LENGTH_SHORT).show()
+        if (playVM.switchSameVodSite()) {
+            // 换站成功：详情也换成新站点的，保证标题/线路/选集一致
+            flagIndex = 0
+            episodeIndex = 0
+            Session.site?.let { s -> Session.vod?.let { v -> vm.load(s, v.vodId) } }
+        }
+    }
+
     // 进全屏播放页 / 退到后台时暂停内嵌播放器，避免两个播放器同时出声
     val owner = LocalContext.current as? androidx.lifecycle.LifecycleOwner
     DisposableEffect(owner, player) {
