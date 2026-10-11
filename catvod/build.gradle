@@ -29,4 +29,10 @@ dependencies {
     api libs.gson
     implementation libs.androidx.core
     implementation libs.rhino
+    // QuickJS 3.2.3（wang.harlon.quickjs）：与参考项目 FongMi 完全同款同版本（其 quickjs 模块
+    // 就是 implementation libs.quickjs.android / .java）。制品自带 4 个 ABI 的
+    // libquickjs-android-wrapper.so（arm64 1296KB），系统编译，无需自行编译 C 源码。
+    // 作用：JS Spider 用原生 QuickJS 执行（支持可选链/空值合并/async 等现代语法），
+    // 失败时自动回退到 Rhino（见 QuickJsSpider.create）。
+    implementation 'wang.harlon.quickjs:wrapper-android:3.2.3'
 }

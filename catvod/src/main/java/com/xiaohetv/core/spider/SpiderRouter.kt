@@ -46,7 +46,9 @@ object SpiderRouter {
                 when {
                     api.isBlank() -> SpiderNull()
                     api.startsWith("csp_") -> JarLoader.load(key, api, ext, jar)
-                    api.endsWith(".js") -> JsSpider.create(api, ext)
+                    // JS spider：优先 QuickJS（现代 ES 语法，与参考项目 FongMi 同款同版本 3.2.3），
+                    // 初始化失败时由 QuickJsSpider.create 内部自动回退 Rhino。
+                    api.endsWith(".js") -> QuickJsSpider.create(api, ext)
                     api.endsWith(".py") -> SpiderNull()
                     else -> CmsSpider(api, type).apply {
                         setHeader(header)

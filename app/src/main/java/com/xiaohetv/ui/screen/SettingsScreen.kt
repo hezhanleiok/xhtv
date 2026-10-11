@@ -516,7 +516,7 @@ fun ModuleDialog(onDismiss: () -> Unit) {
             Triple("MPV 播放核心", "libmpv.so + libplayer.so 已随包内置", true),
             Triple("CMS 点播", "XML / JSON 接口（首页/分类/搜索/详情）", true),
             Triple("JAR Spider", "csp_ 类，DexClassLoader 动态加载", true),
-            Triple("JS Spider", "Rhino 引擎（QuickJS 的等价能力）", true),
+            Triple("JS Spider", "QuickJS 3.2.3 原生引擎（4 ABI .so 已随包）+ Rhino 自动回退", true),
             Triple("磁力 / ed2k", "Thunder 核心（libxl_thunder_sdk.so）已内置", true),
             Triple("直播源", "M3U / TXT / JSON + XMLTV 节目表", true),
             Triple("WebView 嗅探解析", "网页嗅探取流（parse=1 源自动嗅探）", true),
