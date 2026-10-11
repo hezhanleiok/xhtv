@@ -204,11 +204,17 @@ fun PlayerScreen(onFinish: () -> Unit) {
     // 只看错误本身：之前判断里有 `info != null`，上一次播放成功留下的旧 info 会让这里永远 return，
     // 自动换源根本没机会执行（实测日志里一次 跨站点换源 记录都没有）。
     // 重复尝试由 PlayerVM 的 failedVodSites 兜住，不会死循环。
+    // 但**必须加"进行中"闩锁**：否则换源后的站点若也失败，error 一变就又触发一次换源 →
+    // 画面不断重新起播（看起来像"屏幕在刷屏"）。换源成功（info 重新有值）后闩锁复位。
+    var autoSwitching by remember { mutableStateOf(false) }
     LaunchedEffect(vm.error) {
-        if (isLive || vm.error.value.isEmpty()) return@LaunchedEffect
+        if (isLive || vm.error.value.isEmpty() || autoSwitching) return@LaunchedEffect
+        autoSwitching = true
         Toast.makeText(context, "当前站点放不了，正在尝试其它站点…", Toast.LENGTH_SHORT).show()
-        vm.switchSameVodSite()
+        if (!vm.switchSameVodSite()) autoSwitching = false
     }
+    // 换源成功/换集成功（info 有值）→ 允许下一轮自动换源
+    LaunchedEffect(info) { if (info != null) autoSwitching = false }
 
     fun switchEpisode(index: Int) {
         if (index < 0 || index >= episodes.size) return

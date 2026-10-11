@@ -2,6 +2,7 @@ package com.xiaohetv.ui.screen
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -9,14 +10,17 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.xiaohetv.data.Store
+import com.xiaohetv.player.MpvEngine
 import com.xiaohetv.player.MpvPlayerView
 import com.xiaohetv.vm.PlayerVM
+import kotlinx.coroutines.delay
 
 /**
  * 详情页顶部的内嵌播放器（参考项目 fongmi 手机版 VideoActivity 的做法：
@@ -36,6 +40,34 @@ internal fun InlinePlayer(
     var player by remember { mutableStateOf<ExoPlayer?>(null) }
     val ended by rememberUpdatedState(onEnded)
     val notify by rememberUpdatedState(onPlayer)
+
+    // ---- 播放期间保持屏幕常亮（参考项目 FongMi 用 View.setKeepScreenOn 的做法）----
+    // 原因：详情页播放器跑在 MainActivity 里，而常亮只写在 PlayerActivity 的
+    // FLAG_KEEP_SCREEN_ON 上；手机默认几十秒就息屏 → 画面先变暗再黑屏，碰一下又亮，
+    // 反复下来就是"手机自动降低亮度 / 自动刷屏"（TV 盒子通常不息屏，所以只在手机出现）。
+    // 这里用 View 级 keepScreenOn（与宿主 Activity 无关），按"是否处于播放意图"开关：
+    // 暂停/播完立即释放，不会一直占着屏幕。
+    val host = LocalView.current
+    LaunchedEffect(info) {
+        if (info == null) {
+            host.keepScreenOn = false
+            return@LaunchedEffect
+        }
+        try {
+            while (true) {
+                host.keepScreenOn = if (Store.settings.engine == 1) {
+                    MpvEngine.playing
+                } else {
+                    val instance = player
+                    instance?.playWhenReady == true && instance.playbackState != Player.STATE_ENDED
+                }
+                delay(1000)
+            }
+        } finally {
+            host.keepScreenOn = false
+        }
+    }
+    DisposableEffect(Unit) { onDispose { host.keepScreenOn = false } }
 
     DisposableEffect(info, version) {
         val target = info ?: return@DisposableEffect onDispose { }
