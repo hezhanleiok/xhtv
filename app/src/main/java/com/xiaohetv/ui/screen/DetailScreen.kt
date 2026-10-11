@@ -280,7 +280,8 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
             } else {
                 val deltaBytes = fsBytesLoaded - fsLastBytes
                 fsLastBytes = fsBytesLoaded
-                if (deltaBytes > 1024) fsSpeedText = "${deltaBytes / 1024} KB/s"
+                if (deltaBytes > 512 * 1024) fsSpeedText = String.format("%.2f MB/s", deltaBytes / 1048576.0)
+                else if (deltaBytes > 1024) fsSpeedText = "${deltaBytes / 1024} KB/s"
             }
             // 片头（一集只跳一次）/ 片尾（到点自动下一集）
             if (fsIntro > 0 && fsPosition in 0 until fsIntro) engineSeek(player, fsIntro)

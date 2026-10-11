@@ -60,6 +60,9 @@ dependencies {
     debugImplementation libs.compose.ui.tooling
 
     implementation libs.media3.exoplayer
+    // nextlib: media3 FFmpeg 扩展（真软解）。只取 classes.jar + libmedia3ext.so，
+    // 其自带 ffmpeg 已剔除（与 MPV 同名冲突；两边同为 libavcodec 63，JNI 复用现有 ffmpeg）。
+    implementation files("libs/nextlib-media3ext.jar")
     implementation libs.media3.ui
     implementation libs.media3.hls
     implementation libs.media3.dash

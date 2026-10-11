@@ -248,7 +248,12 @@ fun PlayerScreen(onFinish: () -> Unit) {
     fun toggleDecoder() {
         decoder = if (decoder == 0) 1 else 0
         Store.settings.decode = decoder
+        // 同时驱动新的「解码设置」：之前只写老字段 decode，decodeVideo/decodeAudio 从没被改过
+        val mode = if (decoder == 1) 1 else 0
+        Store.settings.decodeVideo = mode
+        Store.settings.decodeAudio = mode
         Store.saveSettings()
+        if (Store.settings.engine == 1) MpvEngine.setDecode(mode) else decoder++
     }
 
     fun cycleScale() {
@@ -259,6 +264,8 @@ fun PlayerScreen(onFinish: () -> Unit) {
         }
         Store.settings.scale = scale
         Store.saveSettings()
+        // MPV 没有 PlayerView 的 resizeMode，比例要显式下发给 mpv，否则该项在 MPV 下等于没实现
+        if (Store.settings.engine == 1) MpvEngine.setScale(scale)
     }
 
     fun cycleSpeed() {
@@ -470,7 +477,8 @@ fun PlayerScreen(onFinish: () -> Unit) {
             val now = bytesLoaded
             val delta = now - lastBytes
             lastBytes = now
-            if (delta > 1024) speedText = "${delta / 1024} KB/s"
+            if (delta > 512 * 1024) speedText = String.format("%.2f MB/s", delta / 1048576.0)
+                else if (delta > 1024) speedText = "${delta / 1024} KB/s"
             delay(1000)
         }
     }
@@ -746,7 +754,19 @@ fun PlayerScreen(onFinish: () -> Unit) {
                     rightButtons.add(Triple("指令", "", showUrl))
                     rightButtons.add(Triple("反转", if (flip) "开" else "", { flip = !flip }))
                     rightButtons.add(Triple("跨类", "", {
-                        Toast.makeText(context, "跨类搜索：请到搜索页输入该片名", Toast.LENGTH_SHORT).show()
+                        // 真功能（照参考项目「跨类」）：拿频道名/片名去聚合搜索，直接进搜索结果页选源
+                        val xhWord = Session.channel?.name?.trim().orEmpty().ifEmpty { vod?.vodName.orEmpty() }
+                        if (xhWord.isEmpty()) {
+                            Toast.makeText(context, "没有可用于跨类搜索的名字", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Session.searchKey = xhWord
+                            Session.searchAuto = true
+                            Session.searchRequest++
+                            val xhIntent = android.content.Intent(context, com.xiaohetv.MainActivity::class.java)
+                            xhIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            context.startActivity(xhIntent)
+                            Toast.makeText(context, "跨类搜索：" + xhWord, Toast.LENGTH_SHORT).show()
+                        }
                     }))
                     rightButtons.add(Triple("换源", "", { vm.nextSource() }))
                 } else {
@@ -1440,6 +1460,13 @@ internal fun hlsFallbackMime(errorCode: Int): String? = when (errorCode) {
     else -> null
 }
 
+/** nextlib FFmpeg 扩展是否可用（一次探测，失败即回落 MediaCodec，不影响播放）。 */
+internal val FFMPEG_AVAILABLE: Boolean by lazy {
+    runCatching {
+        io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegLibrary.isAvailable()
+    }.getOrDefault(false)
+}
+
 internal fun resizeMode(scale: Int): Int = when (scale) {
     3 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
     4 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
@@ -1493,13 +1520,21 @@ internal fun buildPlayer(context: Context, headers: Map<String, String> = emptyM
             }
         }
     }
-    val renderers = DefaultRenderersFactory(context)
-        .setEnableDecoderFallback(true)
-        .setMediaCodecSelector(decodeSelector)
-        .setExtensionRendererMode(
-            if (Store.settings.decode == 0) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
-            else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
-        )
+    // 解码分派（与参考项目「解码设置」一致：自动 / 硬件 / 软解=FFmpeg / 软件=MediaCodec 软解）：
+    //   软解 → nextlib 的 FFmpegOnlyRenderersFactory（真 FFmpeg 解码，H.265/AV1 等兼容性远好于 MediaCodec 软解）；
+    //   自动 → nextlib 的 NextRenderersFactory（优选 FFmpeg，失败自动回落 MediaCodec）；
+    //   硬件 / 软件 / 扩展不可用 → media3 默认工厂 + 我们自己的 MediaCodec 选择器。
+    // FFmpeg 扩展不可用（libmedia3ext 加载失败或缺解码器）时一律回落，绝不至于"整个播不了"。
+    val renderers: androidx.media3.exoplayer.RenderersFactory = when {
+        Store.settings.decodeVideo == 2 && FFMPEG_AVAILABLE ->
+            io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FFmpegOnlyRenderersFactory(context)
+        Store.settings.decodeVideo == 0 && FFMPEG_AVAILABLE ->
+            io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory(context)
+        else -> DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setMediaCodecSelector(decodeSelector)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+    }
 
     // 播放器构建失败也要有完整异常链（不能只有"播不出来"）
     val player = try {

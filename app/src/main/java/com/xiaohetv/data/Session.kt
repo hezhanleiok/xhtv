@@ -27,6 +27,12 @@ object Session {
     /** 置 true 后进入搜索页会自动用 searchKey 搜一次（首页点海报按片名找源用）。 */
     var searchAuto: Boolean = false
 
+    /** 自增即请求跳到搜索页（播放页「跨类」用；必须是可观察状态，AppNav 才能响应）。 */
+    private val searchRequestState = androidx.compose.runtime.mutableStateOf(0)
+    var searchRequest: Int
+        get() = searchRequestState.value
+        set(value) { searchRequestState.value = value }
+
     /** 详情页切全屏时带过来的播放进度（0 = 不续播），播放器起播后消费并清零。 */
     var startPositionMs: Long = 0
 

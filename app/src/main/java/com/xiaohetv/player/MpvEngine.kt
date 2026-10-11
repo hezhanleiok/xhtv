@@ -58,6 +58,38 @@ object MpvEngine {
         runCatching { MPVLib.command(arrayOf("loadfile", currentUrl, "replace")) }
     }
 
+    /** 解码方式（照参考项目「解码设置」）：MPV 用 hwdec 表达。
+     * 0=自动 auto-safe、1=硬件 mediacodec、2/3=软解 no（MPV 本身就是 FFmpeg 解码）。 */
+    fun setDecode(mode: Int) {
+        val value = when (mode) {
+            1 -> "mediacodec"
+            2, 3 -> "no"
+            else -> "auto-safe"
+        }
+        runCatching { MPVLib.setPropertyString("hwdec", value) }
+    }
+
+    /** 比例：0=原始自适应、3=拉伸填满、4=裁剪填满。MPV 用 keepaspect/panscan 表达。 */
+    fun setScale(scale: Int) {
+        runCatching {
+            when (scale) {
+                3 -> {
+                    MPVLib.setPropertyString("keepaspect", "no")
+                    MPVLib.setPropertyString("video-aspect-override", "-1")
+                }
+                4 -> {
+                    MPVLib.setPropertyString("keepaspect", "yes")
+                    MPVLib.setPropertyString("panscan", "1.0")
+                }
+                else -> {
+                    MPVLib.setPropertyString("keepaspect", "yes")
+                    MPVLib.setPropertyString("panscan", "0")
+                    MPVLib.setPropertyString("video-aspect-override", "no")
+                }
+            }
+        }
+    }
+
     /** 循环（点播底栏「循环」）：单集循环开关。 */
     fun setLoop(one: Boolean) {
         runCatching { MPVLib.setPropertyString("loop-file", if (one) "inf" else "no") }
@@ -139,6 +171,9 @@ internal fun MpvPlayerView(
             // 缓冲速度：属性不存在时只是收不到事件，不影响播放
             runCatching { MPVLib.observeProperty("cache-speed", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE) }
             MpvEngine.ready = true
+            // 把「解码」「比例」真正作用到 MPV —— 否则这两项在 MPV 下就是占位符
+            MpvEngine.setDecode(com.xiaohetv.data.Store.settings.decodeVideo)
+            MpvEngine.setScale(com.xiaohetv.data.Store.settings.scale)
             Diag.log("Mpv", "MPV 核心初始化成功（libmpv + libplayer 已加载）")
         } catch (t: Throwable) {
             MpvEngine.error = "MPV 核心初始化失败：${t.message}"

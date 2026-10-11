@@ -152,6 +152,11 @@ fun AppNav() {
         config.boot(sites)
     }
 
+    // 播放页「跨类」：把请求带到搜索页（Session.searchRequest 自增即触发）
+    LaunchedEffect(com.xiaohetv.data.Session.searchRequest) {
+        if (com.xiaohetv.data.Session.searchRequest > 0) nav.navigate(Route.Search)
+    }
+
     NavHost(navController = nav, startDestination = Route.Home) {
         composable(Route.Home) { HomeScreen(nav, sites, config) }
         composable(Route.Search) { SearchScreen(nav, sites) }
