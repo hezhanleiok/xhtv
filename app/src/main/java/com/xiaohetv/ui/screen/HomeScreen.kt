@@ -272,11 +272,12 @@ fun HomeScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
                         items(list.size) { index ->
                             val vod = list[index]
                             PosterCard(vod = vod, onClick = {
-                                Session.site = site
-                                Session.vod = vod
-                                Session.flagIndex = 0
-                                Session.episodeIndex = 0
-                                nav.navigate(Route.Detail)
+                                // 照原实现：点海报 = 「按片名找源」，进搜索页看多站点结果，
+                                // 而不是直接进详情页（详情页内嵌播放器一进就自动播，表现为"点海报就开始播放"）。
+                                // SearchScreen 顶部的自动搜索就是靠这两个 Session 字段触发的。
+                                Session.searchKey = vod.vodName
+                                Session.searchAuto = true
+                                nav.navigate(Route.Search)
                             })
                         }
                     }

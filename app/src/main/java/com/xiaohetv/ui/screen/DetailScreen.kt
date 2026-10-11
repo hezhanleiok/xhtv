@@ -123,6 +123,20 @@ private fun FsButton(label: String, value: String, onClick: () -> Unit) {
     }
 }
 
+/** 面板里的选项胶囊（选中=蓝底白字，与播放页引擎/解码面板一致）。 */
+@Composable
+private fun FsChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) IosBlue else Color(0xFFE5E5EA))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    ) {
+        Text(text = label, color = if (selected) Color.White else Color(0xFF1C1C1E), fontSize = 13.sp)
+    }
+}
+
 /** 毫秒 → mm:ss / h:mm:ss */
 private fun fmtTime(ms: Long): String {
     if (ms <= 0) return "00:00"
@@ -524,6 +538,80 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                         })
                         }
                     }
+                    // 播放引擎面板：EXO / MPV。
+                    // 注意：原实现只把 fsEngineSheet 置 true、却没有渲染面板 → 用户看到"点了没反应"。
+                    if (fsEngineSheet) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .clickable { fsEngineSheet = false }
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.BottomStart)
+                                    .background(Color(0xFFF2F2F7), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                                    .padding(16.dp)
+                            ) {
+                                Text(text = "播放引擎", fontSize = 14.sp, color = TitleColor)
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FsChip("EXO", Store.settings.engine == 0) {
+                                        Store.settings.engine = 0
+                                        Store.saveSettings()
+                                        fsEngineSheet = false
+                                        playerRebuild++   // 触发重建：同一页直接 MPV ⇄ EXO，不用回直播页切
+                                        android.widget.Toast.makeText(context, "已切换：EXO（Media3）", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                    FsChip("MPV", Store.settings.engine == 1) {
+                                        Store.settings.engine = 1
+                                        Store.saveSettings()
+                                        fsEngineSheet = false
+                                        playerRebuild++
+                                        android.widget.Toast.makeText(context, "已切换：MPV（内置 libmpv）", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 解码设置面板：视频 / 音频 × 自动/硬件/软解/软件（原实现同样只有标志没有 UI）
+                    if (fsDecodeSheet) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.6f))
+                                .clickable { fsDecodeSheet = false }
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.BottomStart)
+                                    .background(Color(0xFFF2F2F7), RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+                                    .padding(16.dp)
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FsChip("视频", fsDecodeTab == 0) { fsDecodeTab = 0 }
+                                    FsChip("音频", fsDecodeTab == 1) { fsDecodeTab = 1 }
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf("自动", "硬件", "软解", "软件").forEachIndexed { index, label ->
+                                        val current = if (fsDecodeTab == 0) Store.settings.decodeVideo else Store.settings.decodeAudio
+                                        FsChip(label, current == index) {
+                                            if (fsDecodeTab == 0) Store.settings.decodeVideo = index
+                                            else Store.settings.decodeAudio = index
+                                            Store.saveSettings()
+                                            fsDecodeSheet = false
+                                            playerRebuild++   // 解码方式变了要重建播放器
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // 选集 / 线路 面板
                     if (fsMenu) {
                         Box(
