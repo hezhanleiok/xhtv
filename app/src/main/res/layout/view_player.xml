@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  播放器视图：必须用 texture_view 而不是默认的 surface_view。
+  实测（日志 first_frame elapsedMs=21170）：SurfaceView 放在 Compose AndroidView 里时，
+  Surface 长时间拿不到有效尺寸/不参与层级合成 →   解码好的首帧被压着不渲染（表现为"有声音、黑屏、
+  退出后才出图像"）。TextureView 走普通 View 合成，不存在该问题。
+  另外用 NoTouchPlayerView 接管类：它不消费触摸，保证叠在上面的 Compose 控件可点。
+-->
+<com.xiaohetv.ui.screen.NoTouchPlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:surface_type="texture_view"
+    app:use_controller="false"
+    app:resize_mode="fit" />

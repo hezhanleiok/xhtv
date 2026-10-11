@@ -1,0 +1,575 @@
+package com.xiaohetv.ui.screen
+
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Divider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.navigation.NavHostController
+import com.xiaohetv.core.bean.Config
+import com.xiaohetv.core.config.ConfigStore
+import com.xiaohetv.core.config.LiveConfig
+import com.xiaohetv.core.config.VodConfig
+import com.xiaohetv.core.config.WallConfig
+import com.xiaohetv.core.net.OkHttp
+import com.xiaohetv.core.utils.Json
+import com.xiaohetv.data.Backup
+import com.xiaohetv.data.Store
+import com.xiaohetv.ui.Route
+import com.xiaohetv.ui.components.IosSection
+import com.xiaohetv.ui.components.LargeTitle
+import com.xiaohetv.ui.theme.IosBlue
+import com.xiaohetv.ui.theme.IosSecondary
+import com.xiaohetv.utils.FileUtil
+import com.xiaohetv.vm.ConfigVM
+import com.xiaohetv.vm.SiteVM
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private const val THEME_AUTO = 0
+
+private val THEME_COLORS = listOf(
+    -1 to "关",
+    THEME_AUTO to "自动",
+    0xFF3949AB.toInt() to "靛蓝",
+    0xFF1E88E5.toInt() to "蓝色",
+    0xFF00ACC1.toInt() to "青色",
+    0xFF00897B.toInt() to "蓝绿",
+    0xFF43A047.toInt() to "绿色",
+    0xFF7CB342.toInt() to "黄绿",
+    0xFFFB8C00.toInt() to "橙色",
+    0xFFE53935.toInt() to "红色",
+    0xFFD81B60.toInt() to "玫红",
+    0xFF8E24AA.toInt() to "紫色",
+    0xFF6D4C41.toInt() to "棕色"
+)
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun SettingsScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
+    val context = LocalContext.current
+    val vodDesc by config.vodDesc.collectAsState()
+    val liveDesc by config.liveDesc.collectAsState()
+    val wallDesc by config.wallDesc.collectAsState()
+    val message by config.message.collectAsState()
+    val busy by config.busy.collectAsState()
+    val siteList by sites.sites.collectAsState()
+
+    var inputTarget by remember { mutableStateOf<Pair<Int, Config?>?>(null) }
+    var listTarget by remember { mutableStateOf<Int?>(null) }
+    var homeTarget by remember { mutableStateOf<Int?>(null) }
+    var sizeDialog by remember { mutableStateOf(false) }
+    var themeDialog by remember { mutableStateOf(false) }
+    var dohDialog by remember { mutableStateOf(false) }
+    var restoreDialog by remember { mutableStateOf(false) }
+    var moduleDialog by remember { mutableStateOf(false) }
+    var uaDialog by remember { mutableStateOf(false) }
+    var cacheText by remember { mutableStateOf("计算中…") }
+    var version by remember { mutableIntStateOf(0) }
+
+    fun refreshCache() {
+        cacheText = FileUtil.cacheSize(context)
+    }
+
+    LaunchedEffect(version) { refreshCache() }
+    LaunchedEffect(Unit) { config.refreshDesc() }
+
+    val dohList = remember(version) { VodConfig.getDoh() }
+    val dohIndex = runCatching {
+        val saved = Store.settings.doh
+        if (saved.isEmpty()) 0 else dohList.indexOfFirst { Json.gson.toJson(it) == saved }.coerceAtLeast(0)
+    }.getOrDefault(0)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF2F2F7))
+            .verticalScroll(rememberScrollState())
+    ) {
+        LargeTitle("设置", message)
+
+        if (busy) {
+            androidx.compose.material3.LinearProgressIndicator(
+                color = IosBlue,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        // ============ 订阅 ============
+        IosSection {
+            ConfigRow(
+                label = "点播",
+                value = vodDesc.ifEmpty { "未配置" },
+                icon1 = Icons.Default.Home,
+                icon2 = Icons.Default.Star,
+                onRow = { inputTarget = Config.VOD to null },
+                onLongRow = { ConfigStore.current(Config.VOD)?.let { inputTarget = Config.VOD to it } },
+                onIcon1 = { homeTarget = Config.VOD },
+                onIcon2 = { listTarget = Config.VOD }
+            )
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            ConfigRow(
+                label = "直播",
+                value = liveDesc.ifEmpty { "未配置" },
+                icon1 = Icons.Default.Home,
+                icon2 = Icons.Default.Star,
+                onRow = { inputTarget = Config.LIVE to null },
+                onLongRow = { ConfigStore.current(Config.LIVE)?.let { inputTarget = Config.LIVE to it } },
+                onIcon1 = { homeTarget = Config.LIVE },
+                onIcon2 = { listTarget = Config.LIVE }
+            )
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            ConfigRow(
+                label = "壁纸",
+                value = wallDesc.ifEmpty { "默认" },
+                icon1 = Icons.Default.Home,
+                icon2 = Icons.Default.Refresh,
+                onRow = { inputTarget = Config.WALL to null },
+                onLongRow = null,
+                onIcon1 = {
+                    Store.settings.wall = (Store.settings.wall + 1) % 5
+                    Store.saveSettings()
+                    version++
+                },
+                onIcon2 = {
+                    ConfigStore.current(Config.WALL)?.let { config.select(it, sites) { _, _ -> version++ } }
+                }
+            )
+        }
+
+        // ============ 功能 ============
+        IosSection {
+            SimpleRow("刷新全部订阅", value = "点播 + 直播") {
+                config.reloadAll(sites) { msg ->
+                    config.message.value = msg
+                    version++
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("模块管理", value = "内置") { moduleDialog = true }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("播放设置", value = Store.engineText()) { nav.navigate(Route.PlayerSetting) }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("弹幕设置") { nav.navigate(Route.DanmakuSetting) }
+        }
+
+        // ============ 外观 ============
+        IosSection {
+            SwitchRow("无痕模式", Store.incognitoText(), Store.settings.incognito) {
+                Store.settings.incognito = it
+                Store.saveSettings()
+                version++
+            }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("图片尺寸", Store.sizeText()) { sizeDialog = true }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("主题色彩", Store.themeText()) { themeDialog = true }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("DoH", dohList.getOrNull(dohIndex)?.name ?: "系统") { dohDialog = true }
+        }
+
+        // ============ 数据 ============
+        IosSection {
+            SimpleRow("缓存", cacheText) {
+                FileUtil.clearCache(context)
+                version++
+            }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("备份", "立即备份") {
+                Backup.backup().onSuccess { config.message.value = "已备份：${it.name}" }
+                    .onFailure { config.message.value = it.message ?: "备份失败" }
+            }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("恢复", "从备份恢复") { restoreDialog = true }
+            Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+            SimpleRow("版本", "1.0.0") { config.message.value = "当前已是最新版本" }
+        }
+
+        // ============ 站点 ============
+        if (siteList.isNotEmpty()) {
+            IosSection("站点（${siteList.size}）") {
+                siteList.forEachIndexed { index, site ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = site.name, fontSize = 15.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(text = "可搜索", fontSize = 12.sp, color = IosSecondary)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Switch(
+                            checked = site.searchable == 1,
+                            onCheckedChange = { sites.setSearchable(site, it); version++ }
+                        )
+                    }
+                    if (index < siteList.size - 1) Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
+                }
+            }
+        }
+
+        Text(
+            text = "Xiaohe影视 · 兼容 CatVod 配置与 Spider 协议\nApp 本身不内置任何内容来源",
+            fontSize = 12.sp,
+            color = IosSecondary,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+    }
+
+    // ================= 对话框 =================
+    inputTarget?.let { (type, existing) ->
+        val title = when (type) {
+            Config.VOD -> if (existing == null) "添加点播订阅" else "编辑点播订阅"
+            Config.LIVE -> if (existing == null) "添加直播订阅" else "编辑直播订阅"
+            else -> if (existing == null) "设置壁纸" else "编辑壁纸"
+        }
+        ConfigInputDialog(
+            title = title,
+            config = existing,
+            onDismiss = { inputTarget = null },
+            onConfirm = { url, name ->
+                inputTarget = null
+                val done: (Boolean, String) -> Unit = { ok, msg ->
+                    config.message.value = msg
+                    version++
+                    Toast.makeText(context, msg, if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                }
+                if (existing == null) config.submit(sites, type, url, name, done)
+                else config.edit(sites, existing, url, name, done)
+            }
+        )
+    }
+
+    listTarget?.let { type ->
+        ConfigListDialog(
+            type = type,
+            onDismiss = { listTarget = null },
+            onSelect = { item ->
+                listTarget = null
+                config.select(item, sites) { ok, msg ->
+                    config.message.value = msg
+                    version++
+                    Toast.makeText(context, if (ok) "已切换到：${item.desc()}" else msg, if (ok) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                }
+            },
+            onEdit = { item -> listTarget = null; inputTarget = item.type to item },
+            onDelete = { item -> config.remove(item, sites); version++ }
+        )
+    }
+
+    homeTarget?.let { type ->
+        if (type == Config.VOD) {
+            val items = remember(version) { VodConfig.visibleSites() }
+            HomePickDialog(
+                title = "选择点播主页",
+                items = items.map { it.name },
+                selected = VodConfig.home?.name.orEmpty(),
+                onDismiss = { homeTarget = null },
+                onPick = { index ->
+                    homeTarget = null
+                    items.getOrNull(index)?.let { sites.select(it) }
+                    version++
+                }
+            )
+        } else {
+            val items = remember(version) { LiveConfig.lives.toList() }
+            HomePickDialog(
+                title = "选择直播主页",
+                items = items.map { it.name },
+                selected = LiveConfig.home?.name.orEmpty(),
+                onDismiss = { homeTarget = null },
+                onPick = { index ->
+                    homeTarget = null
+                    items.getOrNull(index)?.let { LiveConfig.setHomeLive(it) }
+                    version++
+                }
+            )
+        }
+    }
+
+    if (sizeDialog) {
+        SingleChoiceDialog(
+            title = "图片尺寸",
+            items = listOf("小", "中", "大", "超大"),
+            selected = Store.settings.size,
+            onDismiss = { sizeDialog = false },
+            onPick = {
+                sizeDialog = false
+                Store.settings.size = it
+                Store.saveSettings()
+                version++
+            }
+        )
+    }
+
+    if (themeDialog) {
+        SingleChoiceDialog(
+            title = "主题色彩",
+            items = THEME_COLORS.map { it.second },
+            selected = THEME_COLORS.indexOfFirst { it.first == Store.settings.themeColor }.coerceAtLeast(0),
+            onDismiss = { themeDialog = false },
+            onPick = {
+                themeDialog = false
+                Store.settings.themeColor = THEME_COLORS[it].first
+                Store.saveSettings()
+                version++
+            }
+        )
+    }
+
+    if (dohDialog) {
+        SingleChoiceDialog(
+            title = "DoH 服务器",
+            items = dohList.map { it.name },
+            selected = dohIndex,
+            onDismiss = { dohDialog = false },
+            onPick = {
+                dohDialog = false
+                val doh = dohList.getOrNull(it) ?: return@SingleChoiceDialog
+                OkHttp.setDoh(listOf(doh))
+                Store.settings.doh = Json.gson.toJson(doh)
+                Store.saveSettings()
+                config.message.value = "DoH：${doh.name}"
+                version++
+            }
+        )
+    }
+
+    if (restoreDialog) {
+        RestoreDialog(
+            files = remember(version) { Backup.list() },
+            onDismiss = { restoreDialog = false },
+            onPick = { file: File ->
+                restoreDialog = false
+                Backup.restore(file).onSuccess {
+                    config.boot(sites)
+                    config.message.value = "已恢复：${file.name}"
+                    version++
+                }.onFailure { config.message.value = it.message ?: "恢复失败" }
+            }
+        )
+    }
+
+    if (moduleDialog) {
+        ModuleDialog(onDismiss = { moduleDialog = false })
+    }
+
+    if (uaDialog) {
+        TextInputDialog(
+            title = "播放 UA",
+            value = Store.settings.ua,
+            placeholder = "留空使用默认 UA",
+            onDismiss = { uaDialog = false },
+            onConfirm = {
+                uaDialog = false
+                Store.settings.ua = it
+                Store.saveSettings()
+                version++
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ConfigRow(
+    label: String,
+    value: String,
+    icon1: androidx.compose.ui.graphics.vector.ImageVector,
+    icon2: androidx.compose.ui.graphics.vector.ImageVector,
+    onRow: () -> Unit,
+    onLongRow: (() -> Unit)?,
+    onIcon1: () -> Unit,
+    onIcon2: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .combinedClickable(onClick = onRow, onLongClick = onLongRow)
+                .padding(6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = label, fontSize = 15.sp)
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = value,
+                    fontSize = 13.sp,
+                    color = IosSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        IconButtonSmall(icon1, onIcon1)
+        Spacer(modifier = Modifier.width(6.dp))
+        IconButtonSmall(icon2, onIcon2)
+    }
+}
+
+@Composable
+private fun IconButtonSmall(icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFFEFF3F7))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = null, tint = IosBlue, modifier = Modifier.size(18.dp))
+    }
+}
+
+@Composable
+private fun SimpleRow(title: String, value: String = "", onClick: () -> Unit = {}) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = title, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        if (value.isNotEmpty()) Text(text = value, fontSize = 13.sp, color = IosSecondary, maxLines = 1)
+    }
+}
+
+@Composable
+private fun SwitchRow(title: String, value: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = title, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Text(text = value, fontSize = 13.sp, color = IosSecondary)
+        Spacer(modifier = Modifier.width(8.dp))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/**
+ * 模块管理：照参考项目做成真实模块列表（名称 / 说明 / 状态），不再是纯文字说明。
+ * 已内置的都是真实可用能力（点播 JAR+JS、直播、磁力/ed2k、EXO 播放核心）。
+ */
+@Composable
+fun ModuleDialog(onDismiss: () -> Unit) {
+    val modules = remember {
+        listOf(
+            Triple("CMS 点播", "XML / JSON 接口（首页/分类/搜索/详情）", true),
+            Triple("JAR Spider", "csp_ 类，DexClassLoader 动态加载", true),
+            Triple("JS Spider", "Rhino 引擎（与 QuickJS 等价能力）", true),
+            Triple("磁力 / ed2k", "Thunder 核心，已内置无需安装", true),
+            Triple("直播源", "M3U / TXT / JSON + XMLTV 节目表", true),
+            Triple("EXO 播放核心", "点播 / 直播 / 磁力 统一播放", true),
+            Triple("WebView 嗅探解析", "网页嗅探取流（parse=1 源自动嗅探）", true),
+            Triple("MPV / VLC 核心", "需要原生库（libvlc 已确认可从 Maven 引入）", false),
+            Triple("Python Spider", "需要 Chaquopy 运行时（未集成）", false)
+        )
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("模块管理") },
+        text = {
+            Column {
+                modules.forEach { item ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(item.first, fontSize = 14.sp)
+                            Text(
+                                text = item.second,
+                                fontSize = 11.sp,
+                                color = IosSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            text = if (item.third) "已内置" else "未内置",
+                            fontSize = 11.sp,
+                            color = if (item.third) Color.White else IosSecondary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(if (item.third) Color(0xFF34C759) else Color(0xFFE5E5EA))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("知道了") }
+        }
+    )
+}
+
+@Composable
+fun AlertDialogSimple(title: String, content: String, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(content, fontSize = 13.sp) },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("知道了") }
+        }
+    )
+}
+
+fun formatBackupTime(millis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))

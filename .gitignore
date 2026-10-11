@@ -1,0 +1,21 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+build
+captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# --- 追加（2026-10-11）：忽略构建缓存/编辑器数据/调试日志/签名文件 ---
+.kotlin/
+.codebuddy/
+build-errors.txt
+err.txt
+out.txt
+*.apk
+*.aab
+*.jks
+*.keystore

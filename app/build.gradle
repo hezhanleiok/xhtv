@@ -1,0 +1,71 @@
+plugins {
+    alias libs.plugins.android.application
+    alias libs.plugins.kotlin.android
+    alias libs.plugins.kotlin.compose
+}
+
+android {
+    namespace = "com.xiaohetv"
+    compileSdk libs.versions.compileSdk.get().toInteger()
+
+    defaultConfig {
+        applicationId "com.xiaohetv"
+        minSdk libs.versions.minSdk.get().toInteger()
+        targetSdk libs.versions.targetSdk.get().toInteger()
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled = true
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+}
+
+dependencies {
+    implementation project(':catvod')
+    implementation fileTree(dir: "libs", include: ["*.aar"])
+    coreLibraryDesugaring libs.desugar.nio
+
+    implementation libs.androidx.core
+    implementation libs.androidx.activity
+    implementation libs.androidx.lifecycle.runtime
+    implementation libs.androidx.lifecycle.viewmodel
+    implementation libs.androidx.navigation
+
+    implementation platform(libs.compose.bom)
+    implementation libs.compose.ui
+    implementation libs.compose.ui.graphics
+    implementation libs.compose.material3
+    implementation libs.compose.icons
+    debugImplementation libs.compose.ui.tooling
+
+    implementation libs.media3.exoplayer
+    implementation libs.media3.ui
+    implementation libs.media3.hls
+    implementation libs.media3.dash
+    implementation libs.media3.smooth
+
+    implementation libs.okhttp
+    implementation libs.gson
+    implementation libs.coil
+}

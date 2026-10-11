@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Xiaohe影视</string>
+    <!-- 桌面图标名（APP 名）：XHTV；app_name 供应用内使用，不改 -->
+    <string name="app_label">XHTV</string>
+</resources>
