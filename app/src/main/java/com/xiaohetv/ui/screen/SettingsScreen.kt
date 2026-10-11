@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -226,28 +227,8 @@ fun SettingsScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
             SimpleRow("版本", "1.0.0") { config.message.value = "当前已是最新版本" }
         }
 
-        // ============ 站点 ============
-        if (siteList.isNotEmpty()) {
-            IosSection("站点（${siteList.size}）") {
-                siteList.forEachIndexed { index, site ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(text = site.name, fontSize = 15.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(text = "可搜索", fontSize = 12.sp, color = IosSecondary)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Switch(
-                            checked = site.searchable == 1,
-                            onCheckedChange = { sites.setSearchable(site, it); version++ }
-                        )
-                    }
-                    if (index < siteList.size - 1) Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
-                }
-            }
-        }
+        // 说明：这里不再列「站点」——按参考项目的逻辑，站点管理只在首页（标题栏点开站点菜单）。
+        // 需要来回切换的项，右上角/首页入口即可完成，设置页只保留真正的"设置"。
 
         Text(
             text = "Xiaohe影视 · 兼容 CatVod 配置与 Spider 协议\nApp 本身不内置任何内容来源",
@@ -507,17 +488,41 @@ private fun SwitchRow(title: String, value: String, checked: Boolean, onChange: 
  */
 @Composable
 fun ModuleDialog(onDismiss: () -> Unit) {
+    // 状态必须写实（之前这里把 MPV 写成"未内置"，与事实不符）：
+    //   · MPV：libmpv.so + libplayer.so 已随包（app/src/main/jniLibs）
+    //   · EXO：media3 1.7.1 + FFmpeg 扩展（nextlib 的 libmedia3ext.so）→ 软解是真 FFmpeg
+    //   · 磁力：libxl_thunder_sdk.so（Thunder）已内置
+    // 未内置的三项是参考项目额外打包的运行时（其 APK 148MB 主要就是这些）：
+    //   QuickJS（我们以 Rhino 实现等价能力）、Chaquopy Python（libpython3.10 等）、Node.js（libnode 46MB）。
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var modVersion by remember { mutableStateOf(0) }
+    var urlDialog by remember { mutableStateOf(false) }
+    var pendingModule by remember { mutableStateOf("") }
+    var busyModule by remember { mutableStateOf("") }
+    fun fileOf(name: String): String = when {
+        name.contains("QuickJS") -> "quickjs.so"
+        name.contains("Python") -> "python3.10.so"
+        name.contains("Node") -> "libnode.so"
+        else -> name.replace(" ", "_") + ".so"
+    }
+    // 状态写实（此前这里把 MPV 写成"未内置"，与事实不符）：
+    //   MPV = libmpv.so + libplayer.so 已随包；EXO = media3 1.7.1 + nextlib FFmpeg 扩展（软解=真 FFmpeg）；
+    //   磁力 = libxl_thunder_sdk.so 已内置。未内置的三项是参考项目另行打包的运行时（其 148MB 主要就是这些）。
+    // 照参考项目 Core 模型，这里给未内置项真实的「填地址 → 下载 → 落盘 → 加载」入口。
     val modules = remember {
         listOf(
+            Triple("EXO 播放核心", "media3 1.7.1 + FFmpeg 扩展：软解=真 FFmpeg 解码", true),
+            Triple("MPV 播放核心", "libmpv.so + libplayer.so 已随包内置", true),
             Triple("CMS 点播", "XML / JSON 接口（首页/分类/搜索/详情）", true),
             Triple("JAR Spider", "csp_ 类，DexClassLoader 动态加载", true),
-            Triple("JS Spider", "Rhino 引擎（与 QuickJS 等价能力）", true),
-            Triple("磁力 / ed2k", "Thunder 核心，已内置无需安装", true),
+            Triple("JS Spider", "Rhino 引擎（QuickJS 的等价能力）", true),
+            Triple("磁力 / ed2k", "Thunder 核心（libxl_thunder_sdk.so）已内置", true),
             Triple("直播源", "M3U / TXT / JSON + XMLTV 节目表", true),
-            Triple("EXO 播放核心", "点播 / 直播 / 磁力 统一播放", true),
             Triple("WebView 嗅探解析", "网页嗅探取流（parse=1 源自动嗅探）", true),
-            Triple("MPV / VLC 核心", "需要原生库（libvlc 已确认可从 Maven 引入）", false),
-            Triple("Python Spider", "需要 Chaquopy 运行时（未集成）", false)
+            Triple("QuickJS 引擎", "参考项目内置；我们用 Rhino 等价实现", false),
+            Triple("Python Spider", "需 Chaquopy 运行时（libpython3.10.so 等）", false),
+            Triple("Node.js Spider", "需 libnode.so（参考项目该库 46MB）", false)
         )
     }
     androidx.compose.material3.AlertDialog(
@@ -526,6 +531,8 @@ fun ModuleDialog(onDismiss: () -> Unit) {
         text = {
             Column {
                 modules.forEach { item ->
+                    val file = fileOf(item.first)
+                    val installed = !item.third && com.xiaohetv.data.ModuleManager.isInstalled(context, file)
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -540,23 +547,70 @@ fun ModuleDialog(onDismiss: () -> Unit) {
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                        val chipColor = when {
+                            item.third || installed -> Color(0xFF34C759)
+                            busyModule == file -> Color(0xFFFF9500)
+                            else -> Color(0xFF0A84FF)
+                        }
+                        val chipText = when {
+                            item.third -> "已内置"
+                            busyModule == file -> "下载中…"
+                            installed -> "已安装"
+                            else -> "下载"
+                        }
                         Text(
-                            text = if (item.third) "已内置" else "未内置",
+                            text = chipText,
                             fontSize = 11.sp,
-                            color = if (item.third) Color.White else IosSecondary,
+                            color = Color.White,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50))
-                                .background(if (item.third) Color(0xFF34C759) else Color(0xFFE5E5EA))
+                                .background(chipColor)
+                                .clickable(enabled = !item.third && !installed && busyModule.isEmpty()) {
+                                    pendingModule = file
+                                    urlDialog = true
+                                }
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (modVersion < 0) "" else
+                        "内置模块无需下载；未内置项填入模块地址即可安装到应用私有目录" +
+                            "（.so 落盘后立即尝试加载）。仅安装可信来源的模块。",
+                    fontSize = 11.sp,
+                    color = IosSecondary
+                )
             }
         },
         confirmButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("知道了") }
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("关闭") }
         }
     )
+    if (urlDialog) {
+        TextInputDialog(
+            title = "安装模块：" + pendingModule,
+            value = "",
+            placeholder = "模块下载地址（.so / .jar）",
+            onDismiss = { urlDialog = false },
+            onConfirm = { url ->
+                val name = pendingModule
+                urlDialog = false
+                busyModule = name
+                scope.launch {
+                    val result = com.xiaohetv.data.ModuleManager.install(context, name, url)
+                    busyModule = ""
+                    modVersion++
+                    android.widget.Toast.makeText(
+                        context,
+                        if (result.isSuccess) "模块安装完成：" + name
+                        else "模块安装失败：" + result.exceptionOrNull()?.message,
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        )
+    }
 }
 
 @Composable

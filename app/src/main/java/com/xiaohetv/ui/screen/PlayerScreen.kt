@@ -571,7 +571,7 @@ fun PlayerScreen(onFinish: () -> Unit) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(32.dp))
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text(text = speedText.ifEmpty { "缓冲中…" }, color = Color.White, fontSize = 13.sp)
+                    Text(text = speedText, color = Color.White, fontSize = 13.sp)
                 }
             }
         }

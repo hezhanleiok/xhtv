@@ -201,6 +201,8 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
     var fsLastBytes by remember { mutableLongStateOf(0L) }
     // 全屏控制层：默认不显示，点一下才出现，4s 后自动隐藏（照参考项目，不是常显）
     var fsControls by remember { mutableStateOf(false) }
+    // 竖屏（未全屏）的控制条显隐
+    var ptControls by remember { mutableStateOf(false) }
     // 切换解码方式需要重建播放器（保持当前进度），这里用自增触发
     var playerRebuild by remember { mutableIntStateOf(0) }
     // 全屏底栏菜单状态（照点播底栏语义，全部作用在同一个 ExoPlayer 上）
@@ -305,6 +307,14 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
     }
 
     // 全屏控制层自动隐藏（4s）；打开选集面板时保持显示
+    // 竖屏（未全屏）单击播放器 → 显示控制条，4 秒后自动隐藏（照参考项目手机版行为）
+    LaunchedEffect(ptControls) {
+        if (ptControls) {
+            kotlinx.coroutines.delay(4000)
+            ptControls = false
+        }
+    }
+
     LaunchedEffect(fsControls, fsMenu) {
         if (fsControls && !fsMenu) {
             kotlinx.coroutines.delay(4000)
@@ -401,7 +411,7 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                     // 参考项目行为：单击唤出/收起控制层；双击直接进/出全屏
                     .pointerInput(Unit) {
                         detectTapGestures(
-                            onTap = { if (fullscreen) fsControls = !fsControls },
+                            onTap = { if (fullscreen) fsControls = !fsControls else ptControls = !ptControls },
                             onDoubleTap = { fullscreen = !fullscreen }
                         )
                     }
@@ -446,7 +456,7 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(28.dp))
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(text = fsSpeedText.ifEmpty { "缓冲中…" }, color = Color.White, fontSize = 12.sp)
+                            Text(text = fsSpeedText, color = Color.White, fontSize = 12.sp)
                         }
                     }
                 }
@@ -463,12 +473,55 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = Color.White)
                 }
                 if (!fullscreen) {
-                    // 全屏按钮放在播放器右下角（播放器控件的位置）
-                    IconButton(
-                        onClick = toFullscreen,
-                        modifier = Modifier.align(Alignment.BottomEnd).padding(2.dp)
-                    ) {
-                        Icon(Icons.Default.Fullscreen, contentDescription = "全屏播放", tint = Color.White)
+                    if (ptControls) {
+                        // 竖屏控制条：进度（点击定位）+ 播放/暂停 + 全屏（单击出现、4 秒自动隐藏）
+                        val ptTotal = fsDuration.coerceAtLeast(1L)
+                        val ptNow = if (fsDrag) fsDragPos else fsPosition
+                        val ptFrac = (ptNow.toFloat() / ptTotal).coerceIn(0f, 1f)
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.45f))
+                                .padding(horizontal = 10.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = fmtTime(ptNow), color = Color.White, fontSize = 11.sp)
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(20.dp)
+                                    .padding(horizontal = 8.dp)
+                                    .pointerInput(ptTotal) {
+                                        detectTapGestures { at ->
+                                            if (fsDuration > 0) engineSeek(player, (at.x / size.width * ptTotal).toLong())
+                                        }
+                                    },
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Row(modifier = Modifier.fillMaxWidth().height(2.dp)) {
+                                    Box(modifier = Modifier.weight(ptFrac.coerceAtLeast(0.001f)).fillMaxHeight().background(IosBlue))
+                                    Box(modifier = Modifier.weight((1f - ptFrac).coerceAtLeast(0.0001f)).fillMaxHeight().background(Color.White.copy(alpha = 0.35f)))
+                                }
+                            }
+                            Text(text = fmtTime(fsDuration), color = Color.White, fontSize = 11.sp)
+                            IconButton(onClick = { engineTogglePlay(player) }, modifier = Modifier.size(34.dp)) {
+                                Icon(
+                                    if (fsPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = "播放/暂停", tint = Color.White, modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            IconButton(onClick = toFullscreen, modifier = Modifier.size(34.dp)) {
+                                Icon(Icons.Default.Fullscreen, contentDescription = "全屏播放", tint = Color.White, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    } else {
+                        IconButton(
+                            onClick = toFullscreen,
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(2.dp)
+                        ) {
+                            Icon(Icons.Default.Fullscreen, contentDescription = "全屏播放", tint = Color.White)
+                        }
                     }
                 } else {
                     // 全屏态：右上角退出 + 底部控制条（细轨进度条，可拖动/点击快进快退）
