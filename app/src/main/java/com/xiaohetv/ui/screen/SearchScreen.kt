@@ -115,12 +115,16 @@ fun SearchScreen(nav: NavHostController, sites: SiteVM) {
         shown.indices.filter { seen.add(shown[it].siteKey) }.toHashSet()
     }
 
-    // 站源列宽度按最长站名自适应（照参考项目 CollectFragment.setWidth：min 132dp，最多约屏幕一半）
+    // 站源列宽度按最长站名自适应（照参考项目 CollectFragment.setWidth：min 132dp，最多约屏幕一半）。
+    // 关键：宽度只能基于「全部可搜索站点」，不能基于「已有结果的站点(hitKeys)」——
+    // 聚合搜索是逐站陆续返回结果的，hitKeys 会在加载途中不断变大，若宽度跟着算，
+    // railWidth 就会中途变宽 → 整个左列（以及右侧结果列）突然向右跳一下（用户实测的"闪一下"）。
+    // 用 siteList 保证进页面即定宽，整个搜索过程恒定不动。
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-    val railWidth = remember(hitKeys, siteList, density) {
-        val names = listOf("全部") + hitKeys.map { item -> siteList.firstOrNull { it.key == item }?.name ?: item }
+    val railWidth = remember(siteList, density) {
+        val names = listOf("全部") + siteList.filter { it.searchable == 1 }.map { it.name }
         val widest = names.maxOfOrNull {
             measurer.measure(AnnotatedString(it), TextStyle(fontSize = 14.sp)).size.width
         } ?: 0
