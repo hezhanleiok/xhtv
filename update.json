@@ -1,0 +1,5 @@
+{
+  "version": "1.0.0",
+  "url": "https://github.com/hezhanleiok/xhtv/releases/latest",
+  "notes": "在 https://github.com/hezhanleiok/xhtv/releases 发布新版本后，把本文件里的 version 改成新版本号、url 改成对应的 APK 下载地址即可；App 的「设置 → 版本」会据此提示更新。"
+}
