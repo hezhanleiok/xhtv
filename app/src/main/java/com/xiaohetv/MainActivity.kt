@@ -49,6 +49,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             XiaoheTheme {
+                // 首次启动先看「欢迎 + 使用说明」，确认后才申请权限
+                WelcomeGate()
                 PermissionGate()
                 AppNav()
             }
@@ -89,6 +91,47 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 首次启动的欢迎 / 使用说明（只弹一次，确认后才进权限申请）。
+ * 说明三件事：① 本软件只是播放器，不提供任何影视订阅；② 需要自己添加配置；③ 合规免责。
+ */
+@Composable
+fun WelcomeGate() {
+    var show by remember { mutableStateOf(!Store.settings.welcomeDone) }
+    if (!show) return
+    AlertDialog(
+        onDismissRequest = { },
+        title = { Text("xiaohe影视 欢迎你") },
+        text = {
+            Text(
+                text = """
+                    · 本软件是「播放器」，自身不提供、不内置任何影视订阅或片源。
+
+                    · 首次使用请先添加配置：右下角「+」输入配置地址，或首页右上「更多」→「订阅设置」。
+                      配置为 TVBox / CatVod 通用格式，请使用你合法获得的地址。
+
+                    · 添加后首页会出现站点与海报：点海报＝按片名跨站找源，点进详情即开始播放。
+                      底部三个页签：点播 / 直播 / 设置；收藏与播放记录在「我的」里。
+
+                    · 播放器手势：单击＝显示控制条，双击＝播放/暂停，横向滑动＝快进快退，
+                      竖向滑动＝上一集/下一集；详情页全屏按钮可切到横屏播放器。
+
+                    · 本程序仅供个人学习与技术研究使用，请勿用于商业用途；
+                      播放内容均来自第三方，请自行确保来源合法并承担相应责任。
+                """.trimIndent(),
+                fontSize = 13.sp
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                Store.settings.welcomeDone = true
+                Store.saveSettings()
+                show = false
+            }) { Text("开始使用") }
+        }
+    )
+}
+
 /** 首次启动申请必要权限（网络为系统默认，不需申请）。 */
 @Composable
 fun PermissionGate() {
@@ -105,11 +148,10 @@ fun PermissionGate() {
         text = {
             Text(
                 text = """
-                    · 网络：加载订阅、播放（必需）
-                    · 通知：后台播放 / 磁力解析状态提示
-                    · 存储与媒体：播放本机视频、导入本地配置文件
-                    · 电话状态：磁力引擎生成设备标识
+                    · 通知：后台播放状态、解析结果提示（可拒绝，不影响播放）
+                    · 媒体/存储：播放本机视频音频、导入本地配置文件（可拒绝，不影响在线播放）
 
+                    网络权限为系统默认，无需申请。
                     所有数据仅保存在本机，不会上传。
                 """.trimIndent(),
                 fontSize = 13.sp
@@ -137,7 +179,6 @@ private fun requiredPermissions(): Array<String> {
     } else {
         list.add(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
-    list.add(Manifest.permission.READ_PHONE_STATE)
     return list.toTypedArray()
 }
 

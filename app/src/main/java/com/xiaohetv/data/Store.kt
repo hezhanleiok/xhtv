@@ -61,7 +61,9 @@ object Store {
         var danmakuApi: String = "",
         var danmakuAuto: Boolean = true,
         var danmakuSpider: Boolean = false,
-        var permAsked: Boolean = false
+        var permAsked: Boolean = false,
+        /** 首次启动的欢迎/使用说明是否已确认（只弹一次）。 */
+        var welcomeDone: Boolean = false
     )
 
     private val gson = Gson()
