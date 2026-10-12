@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
@@ -613,14 +614,16 @@ fun ModuleDialog(onDismiss: () -> Unit) {
                 "$REPO_RAW/modules/quickjs/arm64-v8a/libquickjs-android-wrapper.so"
             ),
             ModuleRow(
-                "Python Spider",
-                "需 Chaquopy 运行时（libpython3.10.so 等，约 15MB）；本仓库不提供",
-                false
+                "Python 运行时（Chaquopy）",
+                "libpython3.10 / libcrypto_python / libsqlite3_python / libssl_python / libchaquopy_java（arm64）",
+                false,
+                "$REPO_RAW/modules/python/arm64-v8a/libpython3.10.so"
             ),
             ModuleRow(
-                "Node.js Spider",
-                "需 libnode.so（参考项目该库 46.5MB）；本仓库不提供",
-                false
+                "Node.js 运行时",
+                "libnode.so（47MB）+ libnodebridge.so（arm64）",
+                false,
+                "$REPO_RAW/modules/node/arm64-v8a/libnode.so"
             )
         )
     }
@@ -628,7 +631,8 @@ fun ModuleDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("模块管理") },
         text = {
-            Column {
+            // 模块条目较多（11 项 + 顶部说明），必须可滚动，否则下面的项看不到
+            Column(modifier = Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                 modules.forEach { item ->
                     // 独立下载项用地址里的文件名（例如 libquickjs-android-wrapper.so）
                     val file = if (item.url.isNotEmpty()) item.url.substringAfterLast('/') else fileOf(item.name)
@@ -659,7 +663,7 @@ fun ModuleDialog(onDismiss: () -> Unit) {
                             busyModule == file -> "下载中…"
                             installed -> "已安装"
                             available -> "下载"
-                            else -> "未提供"
+                            else -> "需自行编译"      // Python/Node：本仓库不提供二进制
                         }
                         Text(
                             text = chipText,
@@ -681,7 +685,9 @@ fun ModuleDialog(onDismiss: () -> Unit) {
                 Text(
                     text = if (modVersion < 0) "" else
                         "已内置的模块无需下载；其余项已预填本仓库（hezhanleiok/xhtv）地址，可自行改。\n" +
-                            "下载后落到应用私有目录，.so 会立即尝试加载 —— 只安装可信来源的模块。",
+                            "下载后落到应用私有目录，.so 会立即尝试加载 —— 只安装可信来源的模块。\n" +
+                            "说明：Python / Node 这里提供的是**运行时二进制**；播放器侧接入对应 Spider 引擎后才能真正跑起来" +
+                            "（需要的话可以继续做 Python 侧接入）。",
                     fontSize = 11.sp,
                     color = IosSecondary
                 )
