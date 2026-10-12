@@ -7,8 +7,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -116,6 +116,16 @@ object MpvEngine {
 /**
  * MPV 播放视图：SurfaceView + MPVLib 生命周期。
  * URL 变化时复用同一个 MPV 实例（只重新 loadfile），避免频道/集数切换时反复 create/destroy。
+ *
+ * ## 修过的三个真 bug（对照日志 + mpv-android 官方用法）
+ * 1. **缺 `gpu-context=android`**：我们的 `libmpv.so` 是 mpv-android 那份（选项表里含
+ *    `gpu-context`/`android`/`mediacodec`），但 Android 上必须显式指定 GPU 上下文，
+ *    否则 vo 初始化失败 → 表现为 mpv 刚拉取一次 m3u8 就断流（日志里 `Broken pipe`），画面永远不出来。
+ * 2. **起播早于 Surface 挂载**：`loadfile` 必须等 `attachSurface` 之后，否则同样是 vo 起不来。
+ *    这里改成 Surface 就绪后由 `LaunchedEffect(url, surfaceReady)` 统一起播。
+ * 3. **旋转/全屏切换没 `replaceSurface`**：Surface 变了却不告诉 mpv → 画面停在旧 Surface（黑屏/花屏）。
+ * 4. 另外加了 `idle=yes`：mpv 默认播完就退出，换集时 `loadfile replace` 会失效。
+ * 5. 补了 mpv 自家日志与 `END_FILE` 错误上报（`Mpv[...]`），以后再出问题日志里直接能看到原因。
  */
 @Composable
 internal fun MpvPlayerView(
@@ -124,6 +134,11 @@ internal fun MpvPlayerView(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var surfaceReady by remember { mutableStateOf(false) }
+    // Surface 每重建一次 +1：用它触发"重新挂载"，而不是靠 url 变化（否则会重复 loadfile 打断播放）
+    var surfaceGen by remember { mutableStateOf(0) }
+    // 已经交给 mpv 的地址：同一地址不重复 loadfile
+    var loadedUrl by remember { mutableStateOf("") }
 
     DisposableEffect(Unit) {
         val observer = object : MPVLib.EventObserver {
@@ -150,14 +165,47 @@ internal fun MpvPlayerView(
                 }
             }
 
-            override fun event(eventId: Int) {}
+            override fun event(eventId: Int) {
+                when (eventId) {
+                    MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED ->
+                        Diag.log("Mpv", "mpv 已加载文件（开始解码）")
+                    MPVLib.MpvEvent.MPV_EVENT_VIDEO_RECONFIG ->
+                        Diag.log("Mpv", "mpv 视频输出已配置")
+                }
+            }
+
+            // mpv 自己的失败原因（例如 "Failed to open …"、"vo/gpu: …" ）——以前完全没上报
+            override fun eventEndFile(reason: Int, error: Int, errorString: String?) {
+                if (reason == MPVLib.MpvEndFileReason.MPV_END_FILE_REASON_ERROR || error != 0) {
+                    MpvEngine.error = "MPV 播放失败：${errorString ?: "error=$error"}"
+                    Diag.error("Mpv", "mpv 播放失败 reason=$reason error=$error ${errorString.orEmpty()}")
+                }
+            }
+        }
+        // mpv 内部日志（只收 warn 及更严重），排障时最关键的一手信息
+        val logObserver = object : MPVLib.LogObserver {
+            override fun logMessage(prefix: String, level: Int, text: String) {
+                if (level <= MPVLib.MpvLogLevel.MPV_LOG_LEVEL_WARN) Diag.log("Mpv", "mpv/$prefix ${text.trim()}")
+            }
         }
         try {
             MPVLib.create(context)
             MPVLib.init()
+            // 关键：Android 必须用 android 这个 GPU 上下文 + GLES，否则 vo 初始化失败（见类注释 1）
             MPVLib.setOptionString("vo", "gpu")
-            MPVLib.setOptionString("hwdec", "auto-safe")
+            MPVLib.setOptionString("gpu-context", "android")
+            // 播完/换集后实例保留，loadfile replace 才有效
+            MPVLib.setOptionString("idle", "yes")
             MPVLib.setOptionString("keep-open", "yes")
+            MPVLib.setOptionString("hwdec", "auto-safe")
+            MPVLib.setOptionString("audio-client-name", "XHTV")
+            // Android 上 curl 没有可用的 CA 文件（系统证书是目录，curl 要单文件），
+            // 实测日志：`mpv/curl TLS certificate verification failed` → `stream Failed to open https://…`
+            // 于是所有 HTTPS 点播源在 MPV 下必然打不开。mpv-android 系播放器同样关闭校验。
+            MPVLib.setOptionString("tls-verify", "no")
+            // UA：mpv 默认 UA 是 "mpv …"，不少源站按 UA 防盗链会直接拒绝（与 EXO 侧保持同一策略）
+            val ua = com.xiaohetv.data.Store.settings.ua.trim()
+            if (ua.isNotEmpty()) MPVLib.setOptionString("user-agent", ua)
             if (headers.isNotEmpty()) {
                 MPVLib.setOptionString(
                     "http-header-fields",
@@ -165,6 +213,7 @@ internal fun MpvPlayerView(
                 )
             }
             MPVLib.addObserver(observer)
+            MPVLib.addLogObserver(logObserver)
             MPVLib.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
             MPVLib.observeProperty("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
             MPVLib.observeProperty("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
@@ -174,7 +223,7 @@ internal fun MpvPlayerView(
             // 把「解码」「比例」真正作用到 MPV —— 否则这两项在 MPV 下就是占位符
             MpvEngine.setDecode(com.xiaohetv.data.Store.settings.decodeVideo)
             MpvEngine.setScale(com.xiaohetv.data.Store.settings.scale)
-            Diag.log("Mpv", "MPV 核心初始化成功（libmpv + libplayer 已加载）")
+            Diag.log("Mpv", "MPV 核心初始化成功（libmpv + libplayer 已加载，gpu-context=android）")
         } catch (t: Throwable) {
             MpvEngine.error = "MPV 核心初始化失败：${t.message}"
             Diag.error("Mpv", "MPV 核心初始化失败", t)
@@ -182,6 +231,7 @@ internal fun MpvPlayerView(
         onDispose {
             runCatching {
                 MPVLib.removeObserver(observer)
+                MPVLib.removeLogObserver(logObserver)
                 MPVLib.detachSurface()
                 MPVLib.destroy()
             }
@@ -189,12 +239,29 @@ internal fun MpvPlayerView(
         }
     }
 
-    // URL 变化（换台/换集）时复用实例重新加载
-    LaunchedEffect(url) {
+    // 起播时机：URL 变化、或 Surface 重新挂好。
+    //
+    // 上一版是"surfaceReady 就 loadfile"，实测日志暴露两个问题：
+    //   · 同一地址被 load 两次（同秒两条"起播"）→ 打断播放并重建视频输出；
+    //   · Surface 刚销毁/重建时又去 loadfile → mpv 报
+    //     `vo/gpu/android Missing surface pointer` + `Failed initializing any suitable GPU context!`
+    //     （这正是"直播能播、点播播不了"的直接原因：点播在详情页 InlinePlayer 里，Surface 会被销毁重建）
+    // 现在：同一地址只 load 一次；Surface 重建且上次确实失败了，才清错误重试一次；其余情况只挂 Surface。
+    LaunchedEffect(url, surfaceReady, surfaceGen) {
         MpvEngine.setUrl(url)
-        if (MpvEngine.ready && url.isNotEmpty()) {
-            runCatching { MPVLib.command(arrayOf("loadfile", url, "replace")) }
+        if (!surfaceReady || !MpvEngine.ready || url.isEmpty()) return@LaunchedEffect
+        when {
+            url != loadedUrl -> {
+                loadedUrl = url
+                Diag.log("Mpv", "mpv 起播（Surface 已就绪）")
+            }
+            MpvEngine.error.isNotEmpty() -> {
+                MpvEngine.error = ""
+                Diag.log("Mpv", "Surface 重建后重试起播")
+            }
+            else -> return@LaunchedEffect
         }
+        runCatching { MPVLib.command(arrayOf("loadfile", url, "replace")) }
     }
 
     AndroidView(
@@ -203,15 +270,21 @@ internal fun MpvPlayerView(
             SurfaceView(ctx).apply {
                 holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: SurfaceHolder) {
-                        runCatching {
-                            MPVLib.attachSurface(holder.surface)
-                            if (url.isNotEmpty()) MPVLib.command(arrayOf("loadfile", url, "replace"))
+                        runCatching { MPVLib.attachSurface(holder.surface) }
+                            .onFailure { Diag.warn("Mpv", "attachSurface 失败：${it.message}") }
+                        surfaceReady = true
+                        surfaceGen++        // 触发上面的 effect：只在必要时重试起播
+                    }
+
+                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                        // 旋转/全屏切换会换 Surface：不 replace 就会停在旧 Surface 上（黑屏）
+                        if (MpvEngine.ready) {
+                            runCatching { MPVLib.replaceSurface(holder.surface) }
                         }
                     }
 
-                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        surfaceReady = false
                         runCatching { MPVLib.detachSurface() }
                     }
                 })
