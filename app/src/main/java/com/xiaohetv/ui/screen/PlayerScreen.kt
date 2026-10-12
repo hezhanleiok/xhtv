@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -191,11 +192,36 @@ fun PlayerScreen(onFinish: () -> Unit) {
     val doSeek: (Long) -> Unit = { ms ->
         if (Store.settings.engine == 1) MpvEngine.seekTo(ms) else player?.seekTo(ms)
     }
+    // 播放/暂停按钮：照参考项目 `VideoActivity.checkPlay()` 的**三态**语义
+    //   · 正在播 → 暂停
+    //   · 没有可播地址（info 为空）→ 重新解析起播（对应参考项目的 onRefresh → mVod.refresh()）
+    //   · 有地址但没在播 → 起播；已播完则回到片头，空闲态先 prepare
     val doTogglePlay: () -> Unit = {
         if (Store.settings.engine == 1) {
-            MpvEngine.pause(MpvEngine.playing)
+            when {
+                MpvEngine.playing -> MpvEngine.pause(true)
+                info == null -> vm.start()
+                else -> {
+                    if (MpvEngine.duration > 0L && MpvEngine.position >= MpvEngine.duration - 1500L) {
+                        MpvEngine.seekTo(if (introMs > 0L) introMs else 0L)
+                    }
+                    MpvEngine.pause(false)
+                }
+            }
         } else {
-            player?.let { if (it.isPlaying) it.pause() else it.play() }
+            val instance = player
+            when {
+                instance == null -> vm.start()
+                instance.currentMediaItem == null -> vm.start()
+                instance.isPlaying -> instance.pause()
+                else -> {
+                    if (instance.playbackState == Player.STATE_ENDED) {
+                        instance.seekTo(if (introMs > 0L) introMs else 0L)
+                    }
+                    if (instance.playbackState == Player.STATE_IDLE) instance.prepare()
+                    instance.play()
+                }
+            }
         }
     }
 
@@ -283,17 +309,50 @@ fun PlayerScreen(onFinish: () -> Unit) {
         if (Store.settings.engine == 1) MpvEngine.setSpeed(speed) else player?.let { it.playbackParameters = it.playbackParameters.withSpeed(speed) }
     }
 
+    fun trackName(type: Int) = when (type) {
+        C.TRACK_TYPE_AUDIO -> "音轨"
+        C.TRACK_TYPE_TEXT -> "字幕"
+        else -> "视轨"
+    }
+
+    /**
+     * 循环切换轨道。
+     *
+     * 修的问题（用户实测"字幕/音轨/视轨点击没反应"）：原来第 2 行就是
+     * `if (groups.size <= 1) return` —— 而绝大多数视频只有 1 条音轨、常常 0 条字幕轨，
+     * 于是点了什么都不会发生，也没有任何提示。现在：
+     *   · 字幕把「关闭」也算进候选（单条字幕也能关/开，与参考项目「关闭/自动」选项一致）；
+     *   · 确实没得切（无轨道 / 只有一条音轨视轨）时，给出 Toast 说明原因；
+     *   · 切成功也 Toast 当前处于第几条，点了必有反馈。
+     */
     fun cycleTrack(type: Int) {
         val instance = player ?: return
         val groups = instance.currentTracks.groups.filter { it.type == type }
-        if (groups.size <= 1) return
+        val name = trackName(type)
+        if (groups.isEmpty()) {
+            Toast.makeText(context, "该视频没有$name", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val canOff = type == C.TRACK_TYPE_TEXT
         val cur = groups.indexOfFirst { it.isSelected }
-        val next = if (cur < 0) 0 else (cur + 1) % groups.size
-        val override = TrackSelectionOverride(groups[next].mediaTrackGroup, 0)
-        instance.trackSelectionParameters = instance.trackSelectionParameters.buildUpon()
-            .setOverrideForType(override)
-            .setTrackTypeDisabled(type, false)
-            .build()
+        if (groups.size == 1 && !canOff) {
+            Toast.makeText(context, "只有 1 条$name，无需切换", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val total = groups.size + if (canOff) 1 else 0
+        val state = if (canOff) (if (cur < 0) 0 else cur + 1) else cur
+        val next = (state + 1) % total
+        val params = instance.trackSelectionParameters.buildUpon()
+        if (canOff && next == 0) {
+            params.setTrackTypeDisabled(type, true)
+            Toast.makeText(context, "$name：关闭", Toast.LENGTH_SHORT).show()
+        } else {
+            val index = if (canOff) next - 1 else next
+            params.setOverrideForType(TrackSelectionOverride(groups[index].mediaTrackGroup, 0))
+            params.setTrackTypeDisabled(type, false)
+            Toast.makeText(context, "$name：第 ${index + 1}/${groups.size} 条", Toast.LENGTH_SHORT).show()
+        }
+        instance.trackSelectionParameters = params.build()
         tracksVersion++
     }
 
@@ -433,6 +492,25 @@ fun PlayerScreen(onFinish: () -> Unit) {
         }
     }
 
+    // MPV 模式没有 ExoPlayer 实例（上面那个 effect 第一行就 return 了），
+    // 播放记录必须在这里单独写，否则"用 MPV 看片"永远不进播放记录。
+    // saveProgressMpv 内部会自己判断 Session.vod 是否存在（直播自然跳过）。
+    DisposableEffect(Unit) {
+        onDispose { if (Store.settings.engine == 1) saveProgressMpv() }
+    }
+
+    // 每 10 秒定时落一次进度：原来只在退出页面时写一次，进程被杀/断电就全丢（历史与续播都跟着失效）。
+    // saveHistory 是写文件，放到 IO 线程，避免主线程卡顿。
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(10_000)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                if (Store.settings.engine == 1) saveProgressMpv()
+                else player?.let { if (!isLive) saveProgress(it) }
+            }
+        }
+    }
+
     LaunchedEffect(player) {
         while (true) {
             if (Store.settings.engine == 1) {
@@ -512,29 +590,68 @@ fun PlayerScreen(onFinish: () -> Unit) {
         }
     } else Modifier
 
-    // 左右滑动快进/快退（照参考项目：右滑快进、左滑快退；整屏宽度对应 120 秒，松手生效）
+    // 点播：上滑下一集 / 下滑上一集
+    fun nextEpisodeFromGesture() {
+        if (episodeIndex + 1 < episodes.size) switchEpisode(episodeIndex + 1)
+        else Toast.makeText(context, "已经是最后一集", Toast.LENGTH_SHORT).show()
+    }
+
+    fun prevEpisodeFromGesture() {
+        if (episodeIndex - 1 >= 0) switchEpisode(episodeIndex - 1)
+        else Toast.makeText(context, "已经是第一集", Toast.LENGTH_SHORT).show()
+    }
+
+    // 点播手势（**轴向锁定**，避免斜着划时"既快进又换集"）：
+    //   横向 → 右滑快进 / 左滑快退（整屏宽度对应 120 秒，松手生效；与参考项目一致）
+    //   竖向 → 上滑下一集 / 下滑上一集（新增，用户要求）
     val seekModifier = if (!isLive) {
-        Modifier.pointerInput(Unit) {
-            var acc = 0f
-            detectHorizontalDragGestures(
-                onDragStart = { acc = 0f },
+        Modifier.pointerInput(duration) {
+            var accX = 0f
+            var accY = 0f
+            var axis = 0            // 0=未定 1=横向 2=竖向
+            val slop = viewConfiguration.touchSlop
+            detectDragGestures(
+                onDragStart = { accX = 0f; accY = 0f; axis = 0 },
+                onDragCancel = { accX = 0f; accY = 0f; axis = 0; seekHint = "" },
                 onDragEnd = {
-                    val deltaMs = (acc / size.width * 120_000f).toLong()
-                    if (deltaMs != 0L && duration > 0) {
-                        doSeek((position + deltaMs).coerceIn(0L, duration))
+                    if (axis == 1) {
+                        val deltaMs = (accX / size.width * 120_000f).toLong()
+                        if (deltaMs != 0L && duration > 0) {
+                            doSeek((position + deltaMs).coerceIn(0L, duration))
+                        }
+                    } else if (axis == 2) {
+                        val threshold = size.height * 0.12f
+                        if (accY <= -threshold) nextEpisodeFromGesture()
+                        else if (accY >= threshold) prevEpisodeFromGesture()
                     }
                     seekHint = ""
-                    acc = 0f
-                },
-                onDragCancel = { acc = 0f; seekHint = "" }
-            ) { _, dx ->
-                acc += dx
-                val deltaMs = (acc / size.width * 120_000f).toLong()
-                val target = (position + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L))
-                seekHint = (if (deltaMs >= 0) "快进 " else "快退 ") + formatTime(target)
+                    accX = 0f; accY = 0f; axis = 0
+                }
+            ) { _, drag ->
+                accX += drag.x
+                accY += drag.y
+                if (axis == 0 && (kotlin.math.abs(accX) > slop || kotlin.math.abs(accY) > slop)) {
+                    axis = if (kotlin.math.abs(accX) >= kotlin.math.abs(accY)) 1 else 2
+                }
+                when (axis) {
+                    1 -> {
+                        val deltaMs = (accX / size.width * 120_000f).toLong()
+                        val target = (position + deltaMs).coerceIn(0L, duration.coerceAtLeast(0L))
+                        seekHint = (if (deltaMs >= 0) "快进 " else "快退 ") + formatTime(target)
+                    }
+                    2 -> seekHint = if (accY < 0) "↑ 下一集" else "↓ 上一集"
+                }
             }
         }
     } else Modifier
+
+    // MPV 起播失败：把 mpv 自己给的原因弹出来（以前只写日志 → 用户只看到白圈一直转，
+    // 于是"MPV 无法播放"既没画面也没任何提示）。遇到"Failed to open / vo 初始化失败"等
+    // 直接看这条提示即可定位，日志里还有 Mpv[...] 的 mpv 原生输出。
+    val mpvError = MpvEngine.error
+    LaunchedEffect(mpvError) {
+        if (mpvError.isNotEmpty()) Toast.makeText(context, mpvError, Toast.LENGTH_LONG).show()
+    }
 
     Box(
         modifier = Modifier
@@ -543,9 +660,12 @@ fun PlayerScreen(onFinish: () -> Unit) {
             .then(swipeModifier)
             .then(seekModifier)
             .combinedClickable(
-                // 单击/双击：唤出或隐藏控制层（双击强制唤出）；长按：打开节目单
+                // 照参考项目 CustomKeyDown：
+                //   单击 → 唤出/隐藏控制层（onSingleTap）
+                //   双击 → **播放/暂停**（onDoubleTap，之前我们只用来"强制唤出控制层"，与参考不一致）
+                //   长按 → 直播打开节目单（点播长按参考项目是临时倍速，需监听松手，暂未接）
                 onClick = { if (!locked) controls = !controls },
-                onDoubleClick = { if (!locked) controls = true },
+                onDoubleClick = { if (!locked) { controls = true; doTogglePlay() } },
                 onLongClick = {
                     if (!locked && isLive) {
                         openPanel(panelGroups) { panelGroupIndex = it }
@@ -571,7 +691,10 @@ fun PlayerScreen(onFinish: () -> Unit) {
 
         // 只保留白圈 + 速度：不再显示"解析播放地址…/正在进入直播…"这类文字。
         // MPV 模式用 mpv 的时长/进度判断是否已出画面（没有 ExoPlayer 的字节统计）。
-        val mpvBooting = Store.settings.engine == 1 && MpvEngine.duration <= 0L && MpvEngine.position <= 0L
+        // 关键：MPV 起播失败时 duration/position 恒为 0，若不看 MpvEngine.error
+        // 这个条件就永远为真 → 白圈无限转、用户完全不知道发生了什么（"MPV 无法播放"的真实观感）。
+        val mpvBooting = Store.settings.engine == 1 &&
+            MpvEngine.duration <= 0L && MpvEngine.position <= 0L && MpvEngine.error.isEmpty()
         if (loading || livePending || mpvBooting) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -595,7 +718,9 @@ fun PlayerScreen(onFinish: () -> Unit) {
                 title = info?.title.orEmpty().ifEmpty { if (isLive) Session.channel?.name.orEmpty() else vod?.vodName.orEmpty() },
                 subtitle = if (isLive) liveSubtitle(panelGroups) else info?.episode.orEmpty(),
                 onBack = {
-                    player?.let { if (!isLive) saveProgress(it) }
+                    // 返回键立即落一次进度（MPV 走 MpvEngine）
+                    if (Store.settings.engine == 1) saveProgressMpv()
+                    else player?.let { if (!isLive) saveProgress(it) }
                     onFinish()
                 },
                 onSheet = { sheet = true },
@@ -755,8 +880,8 @@ fun PlayerScreen(onFinish: () -> Unit) {
                     Toast.makeText(context, url.ifEmpty { "没有播放地址" }, Toast.LENGTH_LONG).show()
                 }
                 if (isLive) {
-                    rightButtons.add(Triple("音轨", "", { if (Store.settings.engine == 1) MpvEngine.cycleTrack("aid") else if (audioLabel.isNotEmpty()) cycleTrack(C.TRACK_TYPE_AUDIO) }))
-                    rightButtons.add(Triple("视轨", "", { if (Store.settings.engine == 1) MpvEngine.cycleTrack("vid") else if (videoLabel.isNotEmpty()) cycleTrack(C.TRACK_TYPE_VIDEO) }))
+                    rightButtons.add(Triple("音轨", audioLabel, { if (Store.settings.engine == 1) MpvEngine.cycleTrack("aid") else cycleTrack(C.TRACK_TYPE_AUDIO) }))
+                    rightButtons.add(Triple("视轨", videoLabel, { if (Store.settings.engine == 1) MpvEngine.cycleTrack("vid") else cycleTrack(C.TRACK_TYPE_VIDEO) }))
                     rightButtons.add(Triple("指令", "", showUrl))
                     rightButtons.add(Triple("反转", if (flip) "开" else "", { flip = !flip }))
                     rightButtons.add(Triple("跨类", "", {
@@ -776,11 +901,12 @@ fun PlayerScreen(onFinish: () -> Unit) {
                     }))
                     rightButtons.add(Triple("换源", "", { vm.nextSource() }))
                 } else {
-                    // 字幕：有字幕轨就给「字幕」按钮切换（无字幕轨时该按钮不出现，与参考项目一致）
-                    // 照参考项目：字幕/音轨/视轨 只显示名字，不显示轨道数字与 "-"
-                    rightButtons.add(Triple("字幕", "", { if (Store.settings.engine == 1) MpvEngine.cycleTrack("sid") else if (textLabel.isNotEmpty()) cycleTrack(C.TRACK_TYPE_TEXT) }))
-                    rightButtons.add(Triple("音轨", "", { if (Store.settings.engine == 1) MpvEngine.cycleTrack("aid") else if (audioLabel.isNotEmpty()) cycleTrack(C.TRACK_TYPE_AUDIO) }))
-                    rightButtons.add(Triple("视轨", "", { if (Store.settings.engine == 1) MpvEngine.cycleTrack("vid") else if (videoLabel.isNotEmpty()) cycleTrack(C.TRACK_TYPE_VIDEO) }))
+                    // 字幕/音轨/视轨：直接交给 cycleTrack 处理（它内部会给 Toast 反馈）。
+                    // 之前这里用 `if (xxxLabel.isNotEmpty())` 包了一层，而 label 在"只有一条轨道"时是空串，
+                    // 于是点击被整段吞掉 —— 这就是"点击没反应"的直接原因。
+                    rightButtons.add(Triple("字幕", textLabel, { if (Store.settings.engine == 1) MpvEngine.cycleTrack("sid") else cycleTrack(C.TRACK_TYPE_TEXT) }))
+                    rightButtons.add(Triple("音轨", audioLabel, { if (Store.settings.engine == 1) MpvEngine.cycleTrack("aid") else cycleTrack(C.TRACK_TYPE_AUDIO) }))
+                    rightButtons.add(Triple("视轨", videoLabel, { if (Store.settings.engine == 1) MpvEngine.cycleTrack("vid") else cycleTrack(C.TRACK_TYPE_VIDEO) }))
                     // 片头/片尾：点一次按当前位置设定跳过点，再点一次清除
                     rightButtons.add(Triple("片头", if (introMs > 0) formatTime(introMs) else "", {
                         introMs = if (introMs > 0) 0L else position
@@ -1410,6 +1536,39 @@ internal fun saveProgress(instance: ExoPlayer) {
             url = episode.url,
             position = instance.currentPosition,
             duration = instance.duration,
+            update = System.currentTimeMillis()
+        )
+    )
+}
+
+/**
+ * MPV 引擎下的进度落库。
+ *
+ * 为什么必须单独写一份：`saveProgress(instance: ExoPlayer)` 需要 ExoPlayer 实例，而 MPV 模式下
+ * 我们**根本不创建 ExoPlayer**（见上面的 DisposableEffect 第一行就 return），
+ * 于是一路走来"用 MPV 看片"从不写播放记录 —— 表现就是播放记录里空的、续播也失效。
+ * 这里改从 MpvEngine 取进度/时长。
+ */
+internal fun saveProgressMpv() {
+    if (Store.settings.incognito) return
+    // 没出画面（duration 仍为 0）就不要写坏记录
+    if (MpvEngine.duration <= 0L) return
+    val site = Session.site ?: return
+    val vod = Session.vod ?: return
+    val flag = vod.flags().getOrNull(Session.flagIndex) ?: return
+    val episode = flag.episodes.getOrNull(Session.episodeIndex) ?: return
+    Store.addHistory(
+        Store.History(
+            siteKey = site.key,
+            vodId = vod.vodId,
+            name = vod.vodName,
+            pic = vod.vodPic,
+            remark = vod.vodRemarks,
+            flag = flag.flag,
+            episode = episode.name,
+            url = episode.url,
+            position = MpvEngine.position,
+            duration = MpvEngine.duration,
             update = System.currentTimeMillis()
         )
     )

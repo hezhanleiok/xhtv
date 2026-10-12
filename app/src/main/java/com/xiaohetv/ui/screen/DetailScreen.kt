@@ -90,19 +90,41 @@ private fun trackLabel(player: ExoPlayer?, type: Int, version: Int): String {
     return if (index >= 0) "${index + 1}/${groups.size}" else "-"
 }
 
-/** 循环切到下一个轨道（与播放页交互一致）。 */
-private fun cycleTrack(player: ExoPlayer?, type: Int) {
-    val p = player ?: return
+/**
+ * 循环切到下一个轨道（与播放页交互一致），返回提示文案（空串=不需要提示）。
+ *
+ * 和播放页同样的问题：原来 `groups.size <= 1` 直接 return，而多数视频只有 1 条音轨、
+ * 常常 0 条字幕轨 → 详情页全屏底栏的「字幕/音轨/视轨」点了完全没反应。
+ * 现在字幕把「关闭」也算进候选，没得切时返回原因，调用方 Toast 出来。
+ */
+private fun cycleTrack(player: ExoPlayer?, type: Int): String {
+    val p = player ?: return ""
     val groups = p.currentTracks.groups.filter { it.type == type }
-    if (groups.size <= 1) return
+    val name = when (type) {
+        androidx.media3.common.C.TRACK_TYPE_AUDIO -> "音轨"
+        androidx.media3.common.C.TRACK_TYPE_TEXT -> "字幕"
+        else -> "视轨"
+    }
+    if (groups.isEmpty()) return "该视频没有$name"
+    val canOff = type == androidx.media3.common.C.TRACK_TYPE_TEXT
     val current = groups.indexOfFirst { it.isSelected }
-    val next = if (current < 0) 0 else (current + 1) % groups.size
-    p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+    if (groups.size == 1 && !canOff) return "只有 1 条$name，无需切换"
+    val total = groups.size + if (canOff) 1 else 0
+    val state = if (canOff) (if (current < 0) 0 else current + 1) else current
+    val next = (state + 1) % total
+    val params = p.trackSelectionParameters.buildUpon()
+    if (canOff && next == 0) {
+        p.trackSelectionParameters = params.setTrackTypeDisabled(type, true).build()
+        return "$name：关闭"
+    }
+    val index = if (canOff) next - 1 else next
+    p.trackSelectionParameters = params
         .setOverrideForType(
-            androidx.media3.common.TrackSelectionOverride(groups[next].mediaTrackGroup, 0)
+            androidx.media3.common.TrackSelectionOverride(groups[index].mediaTrackGroup, 0)
         )
         .setTrackTypeDisabled(type, false)
         .build()
+    return "$name：第 ${index + 1}/${groups.size} 条"
 }
 
 /** 全屏底栏的菜单按钮（标签 + 当前值，与播放页底栏同一套视觉）。 */
@@ -254,8 +276,11 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
         // 等详情写回 Session 后由下面的 flags 监听统一起播。
     }
 
+    // 离开详情页时落一次进度；MPV 模式下没有 ExoPlayer 实例，走 MpvEngine 的进度
     DisposableEffect(Unit) {
-        onDispose { player?.let { saveProgress(it) } }
+        onDispose {
+            if (Store.settings.engine == 1) saveProgressMpv() else player?.let { saveProgress(it) }
+        }
     }
 
     // 全屏态采样播放进度（内嵌播放器没有 Compose 状态，只能定时读）
@@ -448,9 +473,18 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                 )
                 // 加载/缓冲浮层：只保留白圈 + 速度（不再有"解析播放地址…"这类文字）。
                 // MPV 没有 ExoPlayer 的字节统计，用 mpv 的时长/进度判断是否已出画面。
-                val mpvBooting = Store.settings.engine == 1 && MpvEngine.duration <= 0L && MpvEngine.position <= 0L
+                // 关键：MPV 起播失败时这两个值恒为 0，不看 MpvEngine.error 的话浮层会永远转下去。
+                val mpvBooting = Store.settings.engine == 1 &&
+                    MpvEngine.duration <= 0L && MpvEngine.position <= 0L && MpvEngine.error.isEmpty()
                 // EXO 模式下"地址已解析但画面还没出来"也必须显示浮层，否则就是黑屏无提示。
                 val exoBooting = Store.settings.engine != 1 && info != null && playError.isEmpty() && !fsPlaying && fsPosition == 0L
+                // MPV 起播失败：弹出 mpv 自己的原因，避免"一直转圈、没有任何提示"
+                val mpvError = MpvEngine.error
+                LaunchedEffect(mpvError) {
+                    if (mpvError.isNotEmpty()) {
+                        android.widget.Toast.makeText(context, mpvError, android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
                 if (playLoading || (info == null && playError.isEmpty()) || mpvBooting || exoBooting) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -575,24 +609,28 @@ fun DetailScreen(nav: NavHostController, sites: SiteVM) {
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                        // 照参考项目：字幕/音轨/视轨 只显示名字，不带数字、不带 "-"
-                        FsButton("字幕", "", {
-                            if (Store.settings.engine == 1 || textTrack.isNotEmpty()) {
-                                if (Store.settings.engine == 1) MpvEngine.cycleTrack("sid") else cycleTrack(player, androidx.media3.common.C.TRACK_TYPE_TEXT)
-                                trackVersion++
-                            }
+                        // 字幕/音轨/视轨：点了必有反馈。之前外面套了 `isNotEmpty()` 判断，
+                        // 而"只有一条轨道"时 label 是空串 → 点击被整段吞掉（用户反馈"点击没反应"）。
+                        FsButton("字幕", textTrack, {
+                            val tip = if (Store.settings.engine == 1) {
+                                MpvEngine.cycleTrack("sid"); "字幕：已切换"
+                            } else cycleTrack(player, androidx.media3.common.C.TRACK_TYPE_TEXT)
+                            trackVersion++
+                            if (tip.isNotEmpty()) android.widget.Toast.makeText(context, tip, android.widget.Toast.LENGTH_SHORT).show()
                         })
-                        FsButton("音轨", "", {
-                            if (Store.settings.engine == 1 || audioTrack.isNotEmpty()) {
-                                if (Store.settings.engine == 1) MpvEngine.cycleTrack("aid") else cycleTrack(player, androidx.media3.common.C.TRACK_TYPE_AUDIO)
-                                trackVersion++
-                            }
+                        FsButton("音轨", audioTrack, {
+                            val tip = if (Store.settings.engine == 1) {
+                                MpvEngine.cycleTrack("aid"); "音轨：已切换"
+                            } else cycleTrack(player, androidx.media3.common.C.TRACK_TYPE_AUDIO)
+                            trackVersion++
+                            if (tip.isNotEmpty()) android.widget.Toast.makeText(context, tip, android.widget.Toast.LENGTH_SHORT).show()
                         })
-                        FsButton("视轨", "", {
-                            if (Store.settings.engine == 1 || videoTrack.isNotEmpty()) {
-                                if (Store.settings.engine == 1) MpvEngine.cycleTrack("vid") else cycleTrack(player, androidx.media3.common.C.TRACK_TYPE_VIDEO)
-                                trackVersion++
-                            }
+                        FsButton("视轨", videoTrack, {
+                            val tip = if (Store.settings.engine == 1) {
+                                MpvEngine.cycleTrack("vid"); "视轨：已切换"
+                            } else cycleTrack(player, androidx.media3.common.C.TRACK_TYPE_VIDEO)
+                            trackVersion++
+                            if (tip.isNotEmpty()) android.widget.Toast.makeText(context, tip, android.widget.Toast.LENGTH_SHORT).show()
                         })
                         FsButton("片头", if (fsIntro > 0) fmtTime(fsIntro) else "", {
                             fsIntro = if (fsIntro > 0) 0L else fsPosition
