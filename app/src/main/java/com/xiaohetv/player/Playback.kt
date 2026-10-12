@@ -10,11 +10,15 @@ import com.xiaohetv.data.Session
 
 object Playback {
 
-    /** 直接播放一个网址（http/m3u8/magnet 等） */
+    /** 直接播放一个网址（http/m3u8/本地文件等） */
     @JvmStatic
     fun direct(context: Context, url: String, title: String = "") {
         Session.clearPlayback()
         Session.site = null
+        // 关键：清掉"点过直播还没播"的残留标记。
+        // 之前没清 → 上一轮点过直播后再从外部打开磁力/直链，播放页会按"直播待播"处理，
+        // 于是自己加载直播列表并播第一个频道，表现就是"点磁力却跳到了电视直播页面"。
+        Session.livePending = false
         Session.directUrl = url
         Session.directTitle = title.ifEmpty { url }
         Session.directHeaders = emptyMap()
@@ -26,6 +30,7 @@ object Playback {
     fun torrent(context: Context, playUrl: String, title: String) {
         Session.clearPlayback()
         Session.site = null
+        Session.livePending = false
         Session.directUrl = playUrl
         Session.directTitle = title
         Session.directHeaders = emptyMap()

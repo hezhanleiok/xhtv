@@ -42,6 +42,19 @@ object Session {
      * 这样点直播是**直接进横屏播放器**，不会先竖屏加载再旋转。
      */
     var livePending: Boolean = false
+
+    /**
+     * 待处理的磁力/ed2k/thunder 链接（外部 Intent 分享进来，或首页「+」入口）。
+     * 由界面上的 MagnetGate 统一解析：解析出文件列表 → 单个直接播、多个弹选择框。
+     * 用 Compose 状态承载，界面才能"观察到有新链接"。
+     */
+    private val pendingLinkState = androidx.compose.runtime.mutableStateOf("")
+
+    var pendingLink: String
+        get() = pendingLinkState.value
+        set(value) {
+            pendingLinkState.value = value
+        }
     var hotKeys: List<String> = listOf("热门", "电影", "剧集", "综艺", "动漫")
 
     fun clearPlayback() {

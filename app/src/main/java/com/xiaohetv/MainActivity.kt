@@ -49,9 +49,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             XiaoheTheme {
-                // 首次启动先看「欢迎 + 使用说明」，确认后才申请权限
-                WelcomeGate()
-                PermissionGate()
+                // 顺序：先申请权限 → 关掉之后才弹欢迎说明（两者不再同时出现）。
+                // 用显式状态传递，保证权限弹窗关闭时能立刻触发欢迎弹窗（不依赖普通字段的重组时机）。
+                var permDone by remember { mutableStateOf(Store.settings.permAsked) }
+                PermissionGate(onDone = { permDone = true })
+                WelcomeGate(enabled = permDone)
+                // 外部分享/打开链接进来的磁力：统一在这里解析并起播
+                MagnetGate()
                 AppNav()
             }
         }
@@ -81,7 +85,16 @@ class MainActivity : ComponentActivity() {
             } ?: return
             val url = extractUrl(text)
             if (url.isEmpty()) return
-            Playback.direct(this, url)
+            // 磁力/ed2k/thunder 不能直接当媒体地址交给播放器（以前就是直接 direct：
+            // 播放器既不认识 magnet:?xt=… 这个形式，也没有先解析出种子里的文件 →
+            // 结果就是"没有速度、播不了"）。改成交给 MagnetGate 走迅雷解析流程：
+            // 解析出文件列表 → 单个直接播、多个弹选择框。
+            if (com.xiaohetv.player.Thunder.match(url)) {
+                com.xiaohetv.data.Session.pendingLink = url
+                Toast.makeText(this, "正在解析磁力链接…", Toast.LENGTH_SHORT).show()
+            } else {
+                Playback.direct(this, url)
+            }
         }
     }
 
@@ -96,28 +109,20 @@ class MainActivity : ComponentActivity() {
  * 说明三件事：① 本软件只是播放器，不提供任何影视订阅；② 需要自己添加配置；③ 合规免责。
  */
 @Composable
-fun WelcomeGate() {
+fun WelcomeGate(enabled: Boolean = true) {
     var show by remember { mutableStateOf(!Store.settings.welcomeDone) }
-    if (!show) return
+    // 权限弹窗还开着时不弹（由外层传 enabled 精确控制顺序）
+    if (!show || !enabled) return
     AlertDialog(
         onDismissRequest = { },
         title = { Text("xiaohe影视 欢迎你") },
         text = {
             Text(
                 text = """
-                    · 本软件是「播放器」，自身不提供、不内置任何影视订阅或片源。
-
-                    · 首次使用请先添加配置：右下角「+」输入配置地址，或首页右上「更多」→「订阅设置」。
-                      配置为 TVBox / CatVod 通用格式，请使用你合法获得的地址。
-
-                    · 添加后首页会出现站点与海报：点海报＝按片名跨站找源，点进详情即开始播放。
-                      底部三个页签：点播 / 直播 / 设置；收藏与播放记录在「我的」里。
-
-                    · 播放器手势：单击＝显示控制条，双击＝播放/暂停，横向滑动＝快进快退，
-                      竖向滑动＝上一集/下一集；详情页全屏按钮可切到横屏播放器。
-
-                    · 本程序仅供个人学习与技术研究使用，请勿用于商业用途；
-                      播放内容均来自第三方，请自行确保来源合法并承担相应责任。
+                    · 本软件只是播放器，不提供任何影视订阅，请自行添加配置。
+                    · 添加配置：右下角「+」，或首页右上「更多」→「订阅设置」。
+                    · 播放器：单击出控制条，双击播放/暂停，横滑快进快退，上滑下一集。
+                    · 仅供个人学习研究使用，内容来自第三方，请确保来源合法。
                 """.trimIndent(),
                 fontSize = 13.sp
             )
@@ -132,14 +137,70 @@ fun WelcomeGate() {
     )
 }
 
+/**
+ * 磁力/ed2k/thunder 链接的统一入口（外部 Intent 或首页「+」都可走这里）。
+ *
+ * 为什么必须单独有这一层：磁力地址不是媒体地址，必须先交给迅雷核心解析出种子里的文件，
+ * 再由用户选一个、用 `Playback.torrent()` 起播；直接丢给播放器只会"没有速度、播不了"。
+ */
+@Composable
+fun MagnetGate() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var items by remember { mutableStateOf<List<com.xiaohetv.core.bean.Episode>>(emptyList()) }
+    var picking by remember { mutableStateOf(false) }
+    val link = com.xiaohetv.data.Session.pendingLink
+    LaunchedEffect(link) {
+        if (link.isBlank()) return@LaunchedEffect
+        com.xiaohetv.data.Session.pendingLink = ""
+        if (!com.xiaohetv.player.Thunder.isAvailable()) {
+            Toast.makeText(context, "当前设备不支持磁力引擎", Toast.LENGTH_LONG).show()
+            return@LaunchedEffect
+        }
+        val outcome = runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.xiaohetv.player.Thunder.parse(link)
+            }
+        }
+        val files = outcome.getOrNull().orEmpty()
+        when {
+            outcome.isFailure -> Toast.makeText(
+                context,
+                "磁力解析失败：${outcome.exceptionOrNull()?.message}",
+                Toast.LENGTH_LONG
+            ).show()
+
+            files.isEmpty() -> Toast.makeText(context, "没有解析到可播放文件", Toast.LENGTH_LONG).show()
+
+            files.size == 1 -> Playback.torrent(context, files[0].url, files[0].name)
+
+            else -> {
+                items = files
+                picking = true
+            }
+        }
+    }
+    if (picking) {
+        com.xiaohetv.ui.screen.MultiPickDialog(
+            title = "选择要播放的文件",
+            items = items.map { "${it.name}  (${it.desc})" },
+            onDismiss = { picking = false },
+            onPick = { index ->
+                picking = false
+                items.getOrNull(index)?.let { Playback.torrent(context, it.url, it.name) }
+            }
+        )
+    }
+}
+
 /** 首次启动申请必要权限（网络为系统默认，不需申请）。 */
 @Composable
-fun PermissionGate() {
+fun PermissionGate(onDone: () -> Unit = {}) {
     var show by remember { mutableStateOf(!Store.settings.permAsked) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         Store.settings.permAsked = true
         Store.saveSettings()
         show = false
+        onDone()          // 通知外层：权限环节结束，可以弹欢迎说明了
     }
     if (!show) return
     AlertDialog(
@@ -165,6 +226,7 @@ fun PermissionGate() {
                 Store.settings.permAsked = true
                 Store.saveSettings()
                 show = false
+                onDone()
             }) { Text("稍后") }
         }
     )
