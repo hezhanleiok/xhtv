@@ -224,7 +224,80 @@ fun SettingsScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
             Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
             SimpleRow("恢复", "从备份恢复") { restoreDialog = true }
             Divider(color = Color(0xFFE5E5EA), thickness = 0.5.dp)
-            SimpleRow("版本", "1.0.0") { config.message.value = "当前已是最新版本" }
+            // 真实更新检测（原来这里是写死的：点一下永远提示"当前已是最新版本"，也没有仓库地址）
+            var updateBusy by remember { mutableStateOf(false) }
+            var updateInfo by remember { mutableStateOf<com.xiaohetv.data.Updater.Release?>(null) }
+            var updateProgress by remember { mutableIntStateOf(-1) }
+            SimpleRow("版本", if (updateBusy) "正在检查…" else com.xiaohetv.data.Updater.currentVersion(context)) {
+                if (updateBusy) return@SimpleRow
+                updateBusy = true
+                com.xiaohetv.data.Updater.checkAsync { result ->
+                    updateBusy = false
+                    result.onSuccess { release ->
+                        val current = com.xiaohetv.data.Updater.currentVersion(context)
+                        if (com.xiaohetv.data.Updater.isNewer(release.version, current)) {
+                            updateInfo = release
+                        } else {
+                            config.message.value = "当前已是最新版本（$current）"
+                        }
+                    }.onFailure {
+                        config.message.value = "检查更新失败：${it.message ?: "网络不可达"}"
+                    }
+                }
+            }
+            // 发现新版本：可下载安装，也可先去发布页看说明
+            updateInfo?.let { release ->
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { if (updateProgress < 0) updateInfo = null },
+                    title = { Text("发现新版本 ${release.version}") },
+                    text = {
+                        Text(
+                            text = buildString {
+                                append("当前版本：${com.xiaohetv.data.Updater.currentVersion(context)}\n")
+                                append("最新版本：${release.version}\n")
+                                if (release.notes.isNotBlank()) append("\n${release.notes.take(600)}")
+                                if (updateProgress >= 0) append("\n\n正在下载：$updateProgress%")
+                            },
+                            fontSize = 13.sp
+                        )
+                    },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                if (updateProgress >= 0) return@TextButton
+                                updateProgress = 0
+                                com.xiaohetv.data.Updater.downloadAsync(
+                                    context,
+                                    release.url,
+                                    { updateProgress = it }
+                                ) { result ->
+                                    updateProgress = -1
+                                    result.onSuccess { file ->
+                                        updateInfo = null
+                                        com.xiaohetv.data.Updater.install(context, file)
+                                    }.onFailure {
+                                        config.message.value = "下载失败：${it.message}"
+                                    }
+                                }
+                            }
+                        ) { Text(if (updateProgress >= 0) "下载中 $updateProgress%" else "下载并安装") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse(com.xiaohetv.data.Updater.releasesPage)
+                                        )
+                                    )
+                                }
+                            }
+                        ) { Text("打开发布页") }
+                    }
+                )
+            }
         }
 
         // 说明：这里不再列「站点」——按参考项目的逻辑，站点管理只在首页（标题栏点开站点菜单）。
@@ -482,6 +555,17 @@ private fun SwitchRow(title: String, value: String, checked: Boolean, onChange: 
     }
 }
 
+/** 模块列表项：builtIn=已随包内置；url=可从本仓库下载的地址（空=本仓库不提供）。 */
+private data class ModuleRow(
+    val name: String,
+    val desc: String,
+    val builtIn: Boolean,
+    val url: String = ""
+)
+
+/** 本仓库 raw 地址（模块下载用真实地址，不再让用户自己找）。 */
+private const val REPO_RAW = "https://raw.githubusercontent.com/hezhanleiok/xhtv/main"
+
 /**
  * 模块管理：照参考项目做成真实模块列表（名称 / 说明 / 状态），不再是纯文字说明。
  * 已内置的都是真实可用能力（点播 JAR+JS、直播、磁力/ed2k、EXO 播放核心）。
@@ -500,6 +584,8 @@ fun ModuleDialog(onDismiss: () -> Unit) {
     var urlDialog by remember { mutableStateOf(false) }
     var pendingModule by remember { mutableStateOf("") }
     var busyModule by remember { mutableStateOf("") }
+    // 下载地址（默认预填本仓库地址，用户可改）
+    var pendingUrl by remember { mutableStateOf("") }
     fun fileOf(name: String): String = when {
         name.contains("QuickJS") -> "quickjs.so"
         name.contains("Python") -> "python3.10.so"
@@ -512,17 +598,30 @@ fun ModuleDialog(onDismiss: () -> Unit) {
     // 照参考项目 Core 模型，这里给未内置项真实的「填地址 → 下载 → 落盘 → 加载」入口。
     val modules = remember {
         listOf(
-            Triple("EXO 播放核心", "media3 1.7.1 + FFmpeg 扩展：软解=真 FFmpeg 解码", true),
-            Triple("MPV 播放核心", "libmpv.so + libplayer.so 已随包内置", true),
-            Triple("CMS 点播", "XML / JSON 接口（首页/分类/搜索/详情）", true),
-            Triple("JAR Spider", "csp_ 类，DexClassLoader 动态加载", true),
-            Triple("JS Spider", "QuickJS 3.2.3 原生引擎（4 ABI .so 已随包）+ Rhino 自动回退", true),
-            Triple("磁力 / ed2k", "Thunder 核心（libxl_thunder_sdk.so）已内置", true),
-            Triple("直播源", "M3U / TXT / JSON + XMLTV 节目表", true),
-            Triple("WebView 嗅探解析", "网页嗅探取流（parse=1 源自动嗅探）", true),
-            Triple("QuickJS 引擎", "参考项目内置；我们用 Rhino 等价实现", false),
-            Triple("Python Spider", "需 Chaquopy 运行时（libpython3.10.so 等）", false),
-            Triple("Node.js Spider", "需 libnode.so（参考项目该库 46MB）", false)
+            ModuleRow("EXO 播放核心", "media3 1.7.1 + FFmpeg 扩展：软解=真 FFmpeg 解码", true),
+            ModuleRow("MPV 播放核心", "libmpv.so + libplayer.so 已随包（gpu-context=android）", true),
+            ModuleRow("CMS 点播", "XML / JSON 接口（首页/分类/搜索/详情）", true),
+            ModuleRow("JAR Spider", "csp_ 类，DexClassLoader 动态加载", true),
+            ModuleRow("JS Spider", "QuickJS 3.2.3 原生引擎（4 ABI 已随包）+ Rhino 自动回退", true),
+            ModuleRow("磁力 / ed2k", "Thunder 核心（libxl_thunder_sdk.so）已内置", true),
+            ModuleRow("直播源", "M3U / TXT / JSON + XMLTV 节目表", true),
+            ModuleRow("WebView 嗅探解析", "网页嗅探取流（parse=0 嗅探 / parse=4 并行解析）", true),
+            ModuleRow(
+                "QuickJS 原生库（独立下载）",
+                "libquickjs-android-wrapper.so（arm64/armv7/x86/x86_64），可从本仓库下载",
+                false,
+                "$REPO_RAW/modules/quickjs/arm64-v8a/libquickjs-android-wrapper.so"
+            ),
+            ModuleRow(
+                "Python Spider",
+                "需 Chaquopy 运行时（libpython3.10.so 等，约 15MB）；本仓库不提供",
+                false
+            ),
+            ModuleRow(
+                "Node.js Spider",
+                "需 libnode.so（参考项目该库 46.5MB）；本仓库不提供",
+                false
+            )
         )
     }
     androidx.compose.material3.AlertDialog(
@@ -531,32 +630,36 @@ fun ModuleDialog(onDismiss: () -> Unit) {
         text = {
             Column {
                 modules.forEach { item ->
-                    val file = fileOf(item.first)
-                    val installed = !item.third && com.xiaohetv.data.ModuleManager.isInstalled(context, file)
+                    // 独立下载项用地址里的文件名（例如 libquickjs-android-wrapper.so）
+                    val file = if (item.url.isNotEmpty()) item.url.substringAfterLast('/') else fileOf(item.name)
+                    val installed = !item.builtIn && com.xiaohetv.data.ModuleManager.isInstalled(context, file)
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(item.first, fontSize = 14.sp)
+                            Text(item.name, fontSize = 14.sp)
                             Text(
-                                text = item.second,
+                                text = item.desc,
                                 fontSize = 11.sp,
                                 color = IosSecondary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                        val available = item.url.isNotEmpty()      // 本仓库是否提供该模块
                         val chipColor = when {
-                            item.third || installed -> Color(0xFF34C759)
+                            item.builtIn || installed -> Color(0xFF34C759)
                             busyModule == file -> Color(0xFFFF9500)
-                            else -> Color(0xFF0A84FF)
+                            available -> Color(0xFF0A84FF)
+                            else -> Color(0xFF8E8E93)              // 本仓库不提供：灰色，不可点
                         }
                         val chipText = when {
-                            item.third -> "已内置"
+                            item.builtIn -> "已内置"
                             busyModule == file -> "下载中…"
                             installed -> "已安装"
-                            else -> "下载"
+                            available -> "下载"
+                            else -> "未提供"
                         }
                         Text(
                             text = chipText,
@@ -565,8 +668,9 @@ fun ModuleDialog(onDismiss: () -> Unit) {
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50))
                                 .background(chipColor)
-                                .clickable(enabled = !item.third && !installed && busyModule.isEmpty()) {
+                                .clickable(enabled = available && !installed && busyModule.isEmpty()) {
                                     pendingModule = file
+                                    pendingUrl = item.url        // 预填本仓库地址，用户可改
                                     urlDialog = true
                                 }
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
@@ -576,8 +680,8 @@ fun ModuleDialog(onDismiss: () -> Unit) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = if (modVersion < 0) "" else
-                        "内置模块无需下载；未内置项填入模块地址即可安装到应用私有目录" +
-                            "（.so 落盘后立即尝试加载）。仅安装可信来源的模块。",
+                        "已内置的模块无需下载；其余项已预填本仓库（hezhanleiok/xhtv）地址，可自行改。\n" +
+                            "下载后落到应用私有目录，.so 会立即尝试加载 —— 只安装可信来源的模块。",
                     fontSize = 11.sp,
                     color = IosSecondary
                 )
@@ -590,7 +694,7 @@ fun ModuleDialog(onDismiss: () -> Unit) {
     if (urlDialog) {
         TextInputDialog(
             title = "安装模块：" + pendingModule,
-            value = "",
+            value = pendingUrl,
             placeholder = "模块下载地址（.so / .jar）",
             onDismiss = { urlDialog = false },
             onConfirm = { url ->

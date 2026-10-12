@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 供自更新安装：只暴露 cache 目录里下载下来的 APK -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="update" path="." />
+</paths>
