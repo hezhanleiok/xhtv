@@ -294,6 +294,74 @@ fun TextInputDialog(
     )
 }
 
+/**
+ * 站点对话框（照参考项目 `SiteDialog` / `SiteAdapter` 的设计）。
+ *
+ * 参考项目把这三件事放在**同一个站点列表**里，而不是藏进设置页：
+ *   · 点站点名 → 切到该站点（首页/搜索都用它）        ← `onTextClick → listener.setSite(item)`
+ *   · 「搜索」开关 → 该站是否参与聚合搜索              ← `item.setSearchable(!).save()`
+ *   · 「换源」开关 → 该站是否能被换源命中              ← `item.setChangeable(!).save()`
+ * （参考项目还支持长按开关 = 全部站点一起开/关，这里先提供逐项开关，落盘交给 SiteVM。）
+ */
+@Composable
+fun SiteManageDialog(
+    sites: List<com.xiaohetv.core.bean.Site>,
+    currentKey: String,
+    onDismiss: () -> Unit,
+    onSelect: (com.xiaohetv.core.bean.Site) -> Unit,
+    onSearchable: (com.xiaohetv.core.bean.Site, Boolean) -> Unit,
+    onChangeable: (com.xiaohetv.core.bean.Site, Boolean) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = "站点（${sites.size}）", fontSize = 16.sp) },
+        text = {
+            LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                item {
+                    // 参考项目站点开关支持「长按 = 全部一起开/关」（SiteDialog.onSearchLongClick/onChangeLongClick），
+                    // 手机上没有长按提示不好发现，这里直接给四个显式按钮，效果等价。
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = { sites.forEach { onSearchable(it, true) } }) { Text("搜索全开", fontSize = 12.sp) }
+                        TextButton(onClick = { sites.forEach { onSearchable(it, false) } }) { Text("搜索全关", fontSize = 12.sp) }
+                        TextButton(onClick = { sites.forEach { onChangeable(it, true) } }) { Text("换源全开", fontSize = 12.sp) }
+                        TextButton(onClick = { sites.forEach { onChangeable(it, false) } }) { Text("换源全关", fontSize = 12.sp) }
+                    }
+                }
+                items(sites) { item ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = item.name,
+                            fontSize = 15.sp,
+                            color = if (item.key == currentKey) Color(0xFF2FA98C) else Color(0xFF1C1C1E),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).clickable { onSelect(item) }
+                        )
+                        com.xiaohetv.ui.components.Chip(
+                            text = "搜索",
+                            selected = item.searchable == 1,
+                            onClick = { onSearchable(item, item.searchable != 1) }
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        com.xiaohetv.ui.components.Chip(
+                            text = "换源",
+                            selected = item.changeable == 1,
+                            onClick = { onChangeable(item, item.changeable != 1) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } }
+    )
+}
+
 /** 磁力/多文件选集对话框 */
 @Composable
 fun MultiPickDialog(

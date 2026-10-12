@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Search
@@ -161,6 +162,8 @@ fun HomeScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
             },
             topBar = {
                 Column {
+                    // 站点对话框开关：照参考项目，站点名点开的是「站点列表 + 搜索/换源开关」
+                    var siteDialog by remember { mutableStateOf(false) }
                     SiteTitleBar(
                         title = site?.name ?: "Xiaohe影视",
                         subtitle = when {
@@ -170,16 +173,15 @@ fun HomeScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
                         },
                         // 左上角固定用 App 自己的标识（只用 logo 的图形部分，不带 XHTV）
                         logo = "",
-                        onClickTitle = { menu = true },
+                        // 照参考项目 VodFragment：图标 → 观看历史；站点名 → 站点对话框（两者不再一样）
+                        onClickLogo = { nav.navigate(Route.History) },
+                        onClickTitle = { siteDialog = true },
                         actions = {
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                siteList.forEach { item ->
-                                    DropdownMenuItem(
-                                        text = { Text(item.name) },
-                                        onClick = { sites.select(item); menu = false }
-                                    )
-                                }
-                                if (siteList.isNotEmpty()) HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("站点（搜索 / 换源开关）") },
+                                    onClick = { menu = false; siteDialog = true }
+                                )
                                 DropdownMenuItem(
                                     text = { Text("刷新配置") },
                                     onClick = { menu = false; config.refresh(sites) }
@@ -197,6 +199,9 @@ fun HomeScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
                                     onClick = { menu = false; nav.navigate(Route.Log) }
                                 )
                             }
+                            IconButton(onClick = { menu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "更多", tint = Color(0xFF2C2C2E))
+                            }
                             IconButton(onClick = { nav.navigate(Route.Search) }) {
                                 Icon(Icons.Default.Search, contentDescription = "搜索", tint = Color(0xFF2C2C2E))
                             }
@@ -208,6 +213,22 @@ fun HomeScreen(nav: NavHostController, sites: SiteVM, config: ConfigVM) {
                             }
                         }
                     )
+                    if (siteDialog) {
+                        SiteManageDialog(
+                            sites = siteList,
+                            currentKey = site?.key.orEmpty(),
+                            onDismiss = { siteDialog = false },
+                            onSelect = { sites.select(it); siteDialog = false },
+                            onSearchable = { item, enable ->
+                                sites.setSearchable(item, enable)
+                                sites.refresh()       // 让列表拿到最新开关状态并触发重组
+                            },
+                            onChangeable = { item, enable ->
+                                sites.setChangeable(item, enable)
+                                sites.refresh()
+                            }
+                        )
+                    }
 
                     if (types.isNotEmpty()) {
                         LazyRow(

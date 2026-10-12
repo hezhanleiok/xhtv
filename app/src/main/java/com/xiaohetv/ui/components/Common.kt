@@ -130,6 +130,12 @@ fun SiteTitleBar(
     subtitle: String = "",
     logo: String = "",
     onClickTitle: () -> Unit = {},
+    /**
+     * 左上角图标**单独**的行为。
+     * 参考项目 `VodFragment`：图标(`logo`)→观看历史，站点名(`title`)→站点切换对话框，
+     * 两者职责不同；之前我们把整条（含图标）都接到站点菜单上，所以点哪儿都一样。
+     */
+    onClickLogo: (() -> Unit)? = null,
     actions: @Composable () -> Unit = {}
 ) {
     Row(
@@ -144,7 +150,6 @@ fun SiteTitleBar(
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(10.dp))
-                .clickable { onClickTitle() }
                 .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -152,6 +157,7 @@ fun SiteTitleBar(
                 modifier = Modifier
                     .size(30.dp)
                     .clip(RoundedCornerShape(8.dp))
+                    .clickable { (onClickLogo ?: onClickTitle)() }
                     .background(if (logo.isEmpty()) Color.Transparent else IosBlue.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -173,7 +179,8 @@ fun SiteTitleBar(
                 }
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            // 站点名（含副标题）→ 站点切换；左上角图标走 onClickLogo（两者不再混在一起）
+            Column(modifier = Modifier.weight(1f).clickable { onClickTitle() }) {
                 Text(
                     text = title,
                     fontSize = 17.sp,
