@@ -139,8 +139,21 @@ object LocalServer {
                 if (body != null) output.write(body)
                 output.flush()
             }
-        }.onFailure {
-            VodTrace.fail("proxy", it)
+        }.onFailure { error ->
+            // 播放器（ExoPlayer / mpv）主动断开时，我们继续写数据必然抛
+            // Broken pipe / Connection reset —— 这是正常现象（换台、切集、切换解码都会发生）。
+            // 以前一律按"错误 + 完整堆栈"记录，每次换台刷一屏，把真正的错误淹掉了。
+            val message = error.message.orEmpty()
+            val aborted = error is java.net.SocketException ||
+                message.contains("Broken pipe", true) ||
+                message.contains("Connection reset", true) ||
+                message.contains("ECONNRESET", true) ||
+                message.contains("Socket closed", true)
+            if (aborted) {
+                VodTrace.stage("proxy", "aborted", extra = "客户端已断开：${error.javaClass.simpleName}")
+            } else {
+                VodTrace.fail("proxy", error)
+            }
         }
     }
 

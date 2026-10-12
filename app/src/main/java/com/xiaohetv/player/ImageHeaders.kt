@@ -19,9 +19,16 @@ object ImageHeaders {
     fun parse(raw: String): Pair<String, Map<String, String>>? {
         if (!raw.contains('@')) return null
         if (KEYS.none { raw.contains("@$it=") }) return null
+        val clean = raw.substringBefore('@')
+        if (clean.isEmpty()) return null
+        // 关键修复：OkHttp 会先把 URL 里的 `{` `}` `"` 转义成 %7B / %22 / %22，
+        // 这里如果直接解析，请求头名字会变成 `%22User-Agent%22` → 防盗链站点照样拒绝，
+        // 现象就是「有些海报加载不出来」。所以只对 `@…` 这段后缀做百分号还原，
+        // 干净 URL 仍用原文（避免把地址里本该保持编码的字符解坏）。
+        val tail = decode(raw.substring(clean.length))
         val headers = LinkedHashMap<String, String>()
         KEYS.forEach { name ->
-            val value = Regex("@$name=([^@]*)").find(raw)?.groupValues?.get(1)?.trim().orEmpty()
+            val value = Regex("@$name=([^@]*)").find(tail)?.groupValues?.get(1)?.trim().orEmpty()
             if (value.isEmpty()) return@forEach
             if (name == "Headers") {
                 // 形如 {"User-Agent":"xxx","Referer":"yyy"} 或 k:v;k2:v2
@@ -37,10 +44,13 @@ object ImageHeaders {
                 headers[name] = value
             }
         }
-        val clean = raw.substringBefore('@')
-        if (clean.isEmpty()) return null
         return clean to headers
     }
+
+    /** 百分号还原（`+` 先转义，避免被 URLDecoder 当成空格）。 */
+    private fun decode(text: String): String = runCatching {
+        java.net.URLDecoder.decode(text.replace("+", "%2B"), "UTF-8")
+    }.getOrDefault(text)
 }
 
 /** 给 Coil 的 OkHttpClient 挂上：把 URL 后缀里的请求头还原成真正的请求头。 */

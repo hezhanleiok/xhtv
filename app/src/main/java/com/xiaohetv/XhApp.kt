@@ -13,12 +13,20 @@ class XhApp : Application(), coil.ImageLoaderFactory {
         .okHttpClient {
             okhttp3.OkHttpClient.Builder()
                 .addInterceptor(com.xiaohetv.player.ImageHeaderInterceptor())
-                // 死主机/被劫持域名（日志里 bdcache1-f1.v3mh.com → 127.0.0.1）默认要挂满 10s 才失败，
-                // 20 张图同时排队会把图片线程池长时间占死；这里把超时收紧。
+                // 聚合搜索一次会同时出几十张海报。OkHttp 默认「同一主机并发 5」会把这些图片请求
+                // 排队排到很后面 —— 表现为"有些海报加载不出来、点一下才慢慢出来"。
+                // 图片走独立客户端，这里把并发放宽、超时收紧。
+                .dispatcher(okhttp3.Dispatcher().apply {
+                    maxRequests = 64
+                    maxRequestsPerHost = 12
+                })
+                // 死主机/被劫持域名（日志里 bdcache1-f1.v3mh.com → 127.0.0.1）默认要挂满 10s 才失败
                 .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
                 .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
         }
+        // 图片缓存以本地策略为准：命中缓存就秒出，避免每次进搜索页都重新拉一遍
+        .respectCacheHeaders(false)
         .eventListener(object : coil.EventListener {
             override fun onError(request: coil.request.ImageRequest, result: coil.request.ErrorResult) {
                 com.xiaohetv.core.utils.Diag.error(
