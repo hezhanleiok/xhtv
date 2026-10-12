@@ -155,15 +155,63 @@ app/                       # UI 层
 
 ## 5. 与 FongMi/TV 的关系与差异
 
-- 参考项目：<https://github.com/FongMi/TV>；本项目为**独立实现**，仅协议/配置字段兼容。
+- 参考项目：<https://github.com/FongMi/TV>；本项目为**独立实现**，仅协议/配置字段兼容（不是其分支，也不含其源码）。
 - `Spider` 抽象类保留 `com.github.catvod.crawler.Spider` 全限定名，第三方 `spider.jar` 可直接挂载；
   同时提供 `com.github.catvod.Init / utils.Prefers / utils.Path` 垫片供 thunder AAR 使用。
 - 磁力/ed2k 复用迅雷下载核心（`thunder-release.aar`，与参考项目同一套 native 库）。
 
-### 尚未实现（后续计划）
+### 功能对照（截至 2026-10-12，已按实现情况校准）
 
-1. Android TV（leanback）UI 与遥控器适配
-2. MPV 播放核心、ffmpeg 软解、libass 字幕（需要额外的 `lib-*.aar`）
-3. Python Spider（Chaquopy）
-4. WebView 嗅探解析（parse type 0）与并行解析（type 4）
-5. 弹幕渲染、字幕搜索、DLNA、本地 HTTP 推送服务
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| 点播 / 直播 / 聚合搜索 / 收藏 / 播放记录 | ✅ | 跨站点换源、站内线路与选集、断点续播（EXO 与 MPV 都写记录） |
+| EXO 播放核心 | ✅ | media3 1.7.1 |
+| EXO 软解（真 FFmpeg） | ✅ | nextlib `libmedia3ext.so` |
+| MPV 播放核心 | ✅ | `libmpv.so` + `libplayer.so`（`is.xyz.mpv.MPVLib`），显式 `gpu-context=android` |
+| JAR Spider（`csp_`） | ✅ | DexClassLoader 动态加载 |
+| JS Spider | ✅ | QuickJS 3.2.3 原生引擎（4 ABI `.so` 随包）+ Rhino 自动回退 |
+| WebView 嗅探解析（parse type 0） | ✅ | 网页嗅探取流 |
+| 并行解析（parse type 4） | ✅ | 多解析器并行取首个成功结果 |
+| 本地代理服务（`127.0.0.1/proxy`） | ✅ | 内置 HTTP 服务，spider 给出的本地地址可直接播 |
+| 弹幕 | ✅ | 设置项与开关已接入（弹幕数据由所配置接口提供） |
+| 应用内更新 | ✅ | 走本仓库 `update.json` / GitHub Releases，可下载安装 |
+| Python Spider（Chaquopy） | ❌ | 需 Chaquopy 运行时（约 15MB），本仓库不提供 |
+| Node.js Spider | ❌ | 需 `libnode.so`（参考项目该库 46.5MB），本仓库不提供 |
+| libass 字幕渲染 | ❌ | 未内置 libass（字幕依赖播放器/系统能力） |
+| **Android TV（leanback）UI 与遥控器适配** | ❌ | 目前是手机/平板触屏 UI；遥控器仅能完成基本点击，未做焦点导航 |
+| DLNA / 投屏 | ❌ | 未实现（播放器内为提示） |
+| 字幕搜索 | ❌ | 未实现 |
+
+## 6. 授权与合规
+
+- 本项目按 **GNU GPL v3.0** 发布（见 `LICENSE`）。原因：随包分发的 `libmpv.so` 与 FFmpeg 属 GPL 系授权，
+  整个 APK 需以 GPL 兼容方式分发。
+- 第三方组件与许可证清单见 `THIRD-PARTY-NOTICES.md`（含 mpv / FFmpeg / nextlib / QuickJS / AndroidX 等）。
+- ⚠️ **`app/libs/thunder-release.aar`（迅雷下载 SDK）为第三方私有授权组件，不允许公开再分发。**
+  若要公开本仓库，请先移除该文件并同步移除 `Thunder` 调用（磁力/ed2k 会不可用），或自行取得授权。
+
+## 7. 权限说明（只申请必要权限，与参考项目对齐）
+
+| 权限 | 用途 | 可否拒绝 |
+|---|---|---|
+| `INTERNET`、`ACCESS_NETWORK_STATE`、`ACCESS_WIFI_STATE` | 加载配置、播放、网络状态探测 | 必需 |
+| `WAKE_LOCK` | 播放期间解码不被系统中断 | 必需 |
+| `POST_NOTIFICATIONS` | 后台播放 / 解析状态提示 | 可拒绝 |
+| `READ_MEDIA_VIDEO`、`READ_MEDIA_AUDIO`（13+）；`READ_EXTERNAL_STORAGE`（≤12） | 播放本机视频音频、导入本地配置 | 可拒绝 |
+| `REQUEST_INSTALL_PACKAGES` | 应用内更新后调起系统安装器 | 可拒绝 |
+
+**刻意不申请**：`READ_PHONE_STATE`（清单里显式 `tools:node="remove"`，含第三方 SDK 可能带入的声明）、
+`CAMERA`、`MANAGE_EXTERNAL_STORAGE`、生物识别、DLNA 组播等（本 App 不需要）。
+所有数据仅保存在本机，不上传服务器。
+
+## 8. 更新与发布
+
+- App 内「设置 → 版本」可检查更新：先读仓库根目录 `update.json`，取不到再走
+  GitHub Releases API（`https://api.github.com/repos/hezhanleiok/xhtv/releases/latest`）。
+- 发版流程：打 tag → GitHub 上创建 Release 并上传 APK → 修改 `update.json` 的 `version` 与 `url`。
+- 自更新下载到 `cacheDir/update.apk`，经 `FileProvider` 交给系统安装器。
+
+## 9. 免责声明
+
+本项目仅供个人学习与技术研究使用，请勿用于任何商业用途。软件本身不提供、不内置任何影视内容，
+所有播放内容均来自使用者自行配置的第三方来源，请确保来源合法并自行承担相应责任。
